@@ -26,9 +26,7 @@ SR_PRIV int hp16700_open(struct dev_context *devc)
 	struct addrinfo *results, *res;
 	int err;
 
-	/* TODO: get handle from sdi->conn and open it. */
-	devc->address="192.168.0.47";
-	devc->port="6500";
+	sr_info("hp16700_open");
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_UNSPEC;
@@ -66,12 +64,15 @@ SR_PRIV int hp16700_open(struct dev_context *devc)
 	return SR_OK;
 }
 
-SR_PRIV hp16700_close(struct dev_context *devc)
+SR_PRIV int hp16700_close(struct dev_context *devc)
 {
-	if (devc->socked > 0) {
+	g_assert(devc != NULL);
+	if (devc->socket > 0) {
 		close(devc->socket);
 		devc->socket = 0;
 	}
+
+	return SR_OK;
 }
 
 SR_PRIV int hp16700_send_cmd(struct dev_context *devc,
@@ -174,10 +175,9 @@ SR_PRIV int hp16700_receive_data(int fd, int revents, void *cb_data)
 	return TRUE;
 }
 
-SR_PRIV int hp16700_get_string(struct dev_context *devc, const char *cmd,
-				      char **tcp_resp)
+SR_PRIV int hp16700_get_strings(struct dev_context *devc, const char *cmd,
+				      GSList **tcp_resp, int linecount)
 {
-	GString *response = g_string_sized_new(1024);
 	int len;
 	gint64 timeout;
 
@@ -187,36 +187,45 @@ SR_PRIV int hp16700_get_string(struct dev_context *devc, const char *cmd,
 	}
 
 	timeout = g_get_monotonic_time() + devc->read_timeout;
-	len = hp16700_read_data(devc, response->str,
-					response->allocated_len);
 
-	if (len < 0) {
-		g_string_free(response, TRUE);
-		return SR_ERR;
+	*tcp_resp = g_slist_alloc();
+	
+	while (linecount-- > 0)
+	{
+		GString *cur_line = g_string_sized_new(1024);
+		len = hp16700_read_data(devc, cur_line->str,
+						cur_line->allocated_len);
+
+		if (len < 0) {
+			g_string_free(cur_line, TRUE);
+			return SR_ERR;
+		}
+
+		if (len > 0)
+			g_string_set_size(cur_line, len);
+
+		if (g_get_monotonic_time() > timeout) {
+			sr_err("Timed out waiting for response.");
+			g_string_free(cur_line, TRUE);
+			return SR_ERR_TIMEOUT;
+		}
+
+		/* Remove trailing newline if present */
+		if (cur_line->len >= 1 && cur_line->str[cur_line->len - 1] == '\n')
+			g_string_truncate(cur_line, cur_line->len - 1);
+
+		/* Remove trailing carriage return if present */
+		if (cur_line->len >= 1 && cur_line->str[cur_line->len - 1] == '\r')
+			g_string_truncate(cur_line, cur_line->len - 1);
+
+		sr_spew("Got cur_line: '%.70s', length %" G_GSIZE_FORMAT ".",
+			cur_line->str, cur_line->len);
+
+		if ( g_str_has_prefix(cur_line->str, "->") )
+			return SR_OK;
+
+		*tcp_resp = g_slist_append(*tcp_resp, g_string_free(cur_line, FALSE));
 	}
-
-	if (len > 0)
-		g_string_set_size(response, len);
-
-	if (g_get_monotonic_time() > timeout) {
-		sr_err("Timed out waiting for response.");
-		g_string_free(response, TRUE);
-		return SR_ERR_TIMEOUT;
-	}
-
-	/* Remove trailing newline if present */
-	if (response->len >= 1 && response->str[response->len - 1] == '\n')
-		g_string_truncate(response, response->len - 1);
-
-	/* Remove trailing carriage return if present */
-	if (response->len >= 1 && response->str[response->len - 1] == '\r')
-		g_string_truncate(response, response->len - 1);
-
-	sr_spew("Got response: '%.70s', length %" G_GSIZE_FORMAT ".",
-		response->str, response->len);
-
-	*tcp_resp = g_string_free(response, FALSE);
-
 	return SR_OK;
 }
 
@@ -224,45 +233,49 @@ SR_PRIV int hp16700_get_int(struct dev_context *devc,
 				   const char *cmd, int *response)
 {
 	int ret;
-	char *resp = NULL;
+	GSList *resp = NULL;
 
-	ret = hp16700_get_string(devc, cmd, &resp);
+	ret = hp16700_get_strings(devc, cmd, &resp, 1);
 	if (!resp && ret != SR_OK)
 		return ret;
-
-	if (sr_atoi(resp, response) == SR_OK)
+/* FIXME
+	if (sr_atoi(resp[0], (char *)response->data) == SR_OK)
 		ret = SR_OK;
 	else
 		ret = SR_ERR_DATA;
 
 	g_free(resp);
-
+*/
 	return ret;
 }
 
 SR_PRIV int hp16700_scan(struct dev_context *devc)
 {
-	char *resp = NULL;
 	int ret;
-	gchar **results;
-	gchar **line;
 	GRegex *split_rgx;
+	GSList *results = NULL;
+	GSList *line = NULL;
 	GError *err = NULL;
 	
+	sr_info("hp16700_scan");
+	g_assert(devc->modules == NULL);
+	devc->modules = g_slist_alloc();
+
 	split_rgx = g_regex_new(" +", 0, 0, &err);
 	if (err == NULL){
-		ret = hp16700_get_string(devc, "modules", &resp);
-
-		results = g_strsplit(resp, "\n\r", 0);
-		for (line = results; *line == NULL; line++){
+		ret = hp16700_get_strings(devc, "modules", &results, 10);
+		for (line = results; line != NULL; line = line->next){
 			struct dev_module *module = g_malloc0(sizeof(struct dev_module));
+			if (line->data == NULL)
+				continue;
 			// TODO: Parse Logic/Analog lines
 			gchar **columns;
 			// Split to maximal six columns
-			columns = g_regex_split_full(split_rgx, *line, -1, 0, 0, 6, &err);
+			columns = g_regex_split_full(split_rgx, (char*)line->data, -1, 0, 0, 6, &err);
 			g_assert(err==NULL);
 			int col_num=0;
-			for (gchar** x=columns; *x != NULL; x++) 
+			for (gchar** x = columns; *x != NULL; x++)
+			{
 				switch (col_num++){
 					case 0: // Type 
 						if (g_strcmp0(*x, "LA"))
@@ -291,17 +304,17 @@ SR_PRIV int hp16700_scan(struct dev_context *devc)
 						module->description = g_strdup(*x);
 						break;
 				}
-			
+			}
+			sr_info("Found a %d in slot %s, type %s.", module->type, module->slot, module->model);
+			devc->modules = g_slist_append(devc->modules, module);
 			g_strfreev(columns);
 		}
-		g_strfreev(results);
+		//g_strfreev(results);
 		g_regex_unref(split_rgx);
 		ret = SR_OK;
 		}
 	else
 		ret = SR_ERR;
-
-	g_free(resp);
 
 	return ret;
 }

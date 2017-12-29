@@ -32,6 +32,7 @@ static const char *logic_pattern_str[] = {
 };
 
 static const uint32_t scanopts[] = {
+	SR_CONF_CONN,
 	SR_CONF_NUM_LOGIC_CHANNELS,
 //	SR_CONF_NUM_ANALOG_CHANNELS,
 };
@@ -79,25 +80,32 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	struct sr_config *src;
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
+	struct sr_channel *ch;
 	const char *conn = NULL;
 	gchar **params;
-	int i, maxch;
+	int channel_idx = 0;
+	int i = 0;
 
-	maxch = NUM_CHANNELS;
+	sr_info("scan");
+
 	for (l = options; l; l = l->next) {
 		src = l->data;
-//		if (src->key == SR_CONF_NUM_LOGIC_CHANNELS)
-//			maxch = g_variant_get_int32(src->data);
 		if (src->key == SR_CONF_CONN)
 			conn = g_variant_get_string(src->data, NULL);
 	}
 
-	params = g_strsplit(conn, "/", 0);
-	if (!params || !params[1] || !params[2]) {
+	if (conn)
+		params = g_strsplit(conn, "/", 0);
+	else
+		return NULL;
+
+	if (!params || !params[0] || !params[1] || !params[2] ) {
 		sr_err("Invalid Parameters.");
 		g_strfreev(params);
 		return NULL;
 	}
+	for (int i=0; i<3; i++)
+		sr_info("params[%d]=%s", i, params[i]);
 	if (g_ascii_strncasecmp(params[0], "tcp", 3)) {
 		sr_err("Only TCP (tcp-raw) protocol is currently supported.");
 		g_strfreev(params);
@@ -114,7 +122,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	devc = g_malloc0(sizeof(struct dev_context));
 
 	/* Default non-zero values (if any) */
-	devc->fd = -1;
 	devc->tcp_buffer = 0;
 
 	devc->read_timeout = 1000 * 1000;
@@ -123,6 +130,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	devc->port = g_strdup(params[2]);
 	g_strfreev(params);
 
+	sr_info("HIER");
 	if (hp16700_open(devc) != SR_OK)
 		goto err_free;
 	//if (beaglelogic_tcp_detect(devc) != SR_OK)
@@ -130,13 +138,70 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		goto err_free;
 	if (hp16700_close(devc) != SR_OK)
 		goto err_free;
-	sr_info("BeagleLogic device found at %s : %s",
+	sr_info("HP16700 device found at %s : %s",
 		devc->address, devc->port);
 
+	int module_base = 0;
+	struct sr_channel *chan = NULL;
+
+	for (l = devc->modules; l != NULL; l = l->next)
+	{
+		struct dev_module *module = l->data;
+		struct sr_channel_group *cg = NULL;
+		
+		sr_info("HALLO");
+		sr_info("module = %04x, devc->modules=%04x", module, devc->modules);
+		if (module == NULL){
+			continue;
+		}
+		module_base += 1024;
+
+		char **changroup_names = NULL;
+		char **chan_names = NULL;
+		int chan_type;
+
+		if (module->type == HP16700_SCOPE)
+		{
+			chan_type = SR_CHANNEL_ANALOG;
+			const char *names[] = {"Analog", NULL};
+			const char *channels[] = { "CH1", "CH2", NULL};
+			changroup_names = (char **)names;
+			chan_names = (char **)channels;
+		}
+		else if (strcmp(module->name, "16550A") == 0)
+		{
+			chan_type = SR_CHANNEL_LOGIC;
+			const char *names[] = { "1", "2", "3", "4", "5", "6", NULL};
+			const char *channels[] = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", NULL };
+			changroup_names = (char **)names;
+			chan_names = (char **)channels;
+		}
+		for ( ; *changroup_names != NULL ; changroup_names++ )
+		{
+			char group_name[1024];
+			memset(group_name, 0, sizeof(group_name));
+			snprintf(group_name, sizeof(group_name)-1, "%s-%s", module->name, *changroup_names);
+
+			cg = g_malloc0(sizeof(struct sr_channel_group));
+			cg->name = g_strdup(group_name);
+			cg->priv = module; // TODO: any good?!
+
+			channel_idx += 64;
+			i = 0;
+			for ( ; *chan_names != NULL ; chan_names++)
+			{
+				ch = sr_channel_new(sdi, channel_idx + i, SR_CHANNEL_ANALOG,  1, *chan_names);
+				cg->channels = g_slist_append(cg->channels, ch);
+				i++;
+
+			}
+			sdi->channel_groups = g_slist_append(sdi->channel_groups, cg);
+		}
+	}
 	/* Fill the channels */
-	for (i = 0; i < maxch; i++)
-		sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE,
-				channel_names[i]);
+	//for (i = 0; i < maxch; i++)
+	//	sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE,
+	//			channel_names[i]);
 
 	sdi->priv = devc;
 
@@ -152,6 +217,47 @@ err_free:
 
 	return NULL;
 }
+
+static int dev_open(struct sr_dev_inst *sdi)
+{
+	struct dev_context *devc = sdi->priv;
+
+	sr_info("dev_open");
+	/* Open BeagleLogic */
+	if (hp16700_open(devc))
+		return SR_ERR;
+
+	/* Set fd and local attributes */
+	/* devc->pollfd.fd = devc->socket;
+	devc->pollfd.events = G_IO_IN;
+	devc->pollfd.revents = 0;
+	*/
+
+	/* Get the default attributes */
+	//devc->beaglelogic->get_samplerate(devc);
+	//devc->beaglelogic->get_sampleunit(devc);
+	//devc->beaglelogic->get_buffersize(devc);
+	//devc->beaglelogic->get_bufunitsize(devc);
+
+	/* Set the triggerflags to default for continuous capture unless we
+	 * explicitly limit samples using SR_CONF_LIMIT_SAMPLES */
+	//devc->triggerflags = BL_TRIGGERFLAGS_CONTINUOUS;
+	//devc->beaglelogic->set_triggerflags(devc);
+
+	/* Map the kernel capture FIFO for reads, saves 1 level of memcpy */
+/*	if (devc->beaglelogic == &beaglelogic_native_ops) {
+		if (devc->beaglelogic->mmap(devc) != SR_OK) {
+			sr_err("Unable to map capture buffer");
+			devc->beaglelogic->close(devc);
+			return SR_ERR;
+		}
+	} else {
+		devc->tcp_buffer = g_malloc(TCP_BUFFER_SIZE);
+	}
+*/
+	return SR_OK;
+}
+
 static int dev_close(struct sr_dev_inst *sdi)
 {
 	(void)sdi;

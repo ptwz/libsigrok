@@ -61,7 +61,7 @@ struct dev_context {
 	uint64_t num_analog_channels;
 
 	uint64_t logic_unitsize;
-	GHashTable *ch_ag;
+	GSList *modules;
 };
 
 enum hp16700_module_type{
@@ -84,11 +84,15 @@ struct dev_module {
 	
 };
 
-SR_PRIV int hp16700_open(struct sr_dev_inst *sdi);
-SR_PRIV int hp16700_close(struct sr_dev_inst *sdi);
+SR_PRIV int hp16700_open(struct dev_context *devc);
+SR_PRIV int hp16700_close(struct dev_context *devc);
 SR_PRIV int hp16700_receive_data(int fd, int revents, void *cb_data);
-SR_PRIV int hp16700_get_string(struct dev_context *devc, const char *cmd,
-				      char **tcp_resp);
+SR_PRIV int hp16700_get_strings(struct dev_context *devc, const char *cmd,
+				      GSList **tcp_resp, int linecount);
+SR_PRIV int hp16700_get_int(struct dev_context *devc,
+				   const char *cmd, int *response);
+SR_PRIV int hp16700_send_cmd(struct dev_context *devc,
+				    const char *format, ...);
 SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 				     int maxlen);
 SR_PRIV int hp16700_drain(struct dev_context *devc);
