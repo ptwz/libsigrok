@@ -75,107 +75,83 @@ static const uint64_t samplerates[] = {
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
-	struct dev_context *devc;
-	struct sr_dev_inst *sdi;
-	struct sr_channel *ch;
-	struct sr_channel_group *cg;//, *acg;
-	struct sr_config *src;
-	//struct analog_gen *ag;
 	GSList *l;
-	int num_logic_channels, i;
-	char channel_name[16];
-	
-	num_logic_channels = DEFAULT_NUM_LOGIC_CHANNELS;
-	//num_analog_channels = DEFAULT_NUM_ANALOG_CHANNELS;
+	struct sr_config *src;
+	struct sr_dev_inst *sdi;
+	struct dev_context *devc;
+	const char *conn = NULL;
+	gchar **params;
+	int i, maxch;
+
+	maxch = NUM_CHANNELS;
 	for (l = options; l; l = l->next) {
 		src = l->data;
-		switch (src->key) {
-		case SR_CONF_NUM_LOGIC_CHANNELS:
-			num_logic_channels = g_variant_get_int32(src->data);
-			break;
-//		case SR_CONF_NUM_ANALOG_CHANNELS:
-//			return SR_ERR_NA;
-//			break;
-		}
+//		if (src->key == SR_CONF_NUM_LOGIC_CHANNELS)
+//			maxch = g_variant_get_int32(src->data);
+		if (src->key == SR_CONF_CONN)
+			conn = g_variant_get_string(src->data, NULL);
 	}
 
-	sdi = g_malloc0(sizeof(struct sr_dev_inst));
+	params = g_strsplit(conn, "/", 0);
+	if (!params || !params[1] || !params[2]) {
+		sr_err("Invalid Parameters.");
+		g_strfreev(params);
+		return NULL;
+	}
+	if (g_ascii_strncasecmp(params[0], "tcp", 3)) {
+		sr_err("Only TCP (tcp-raw) protocol is currently supported.");
+		g_strfreev(params);
+		return NULL;
+	}
+
+//	maxch = (maxch > 8) ? NUM_CHANNELS : 8;
+
+	sdi = g_new0(struct sr_dev_inst, 1);
 	sdi->status = SR_ST_INACTIVE;
-	sdi->model = g_strdup("Demo device");
+	sdi->model = g_strdup("HP16700");
+	sdi->version = g_strdup("1.0");
 
 	devc = g_malloc0(sizeof(struct dev_context));
-	devc->cur_samplerate = SR_KHZ(200);
-	devc->num_logic_channels = num_logic_channels;
-	devc->logic_unitsize = (devc->num_logic_channels + 7) / 8;
-	//devc->num_analog_channels = num_analog_channels;
-	hp16700_scan(devc);
 
-	if (num_logic_channels > 0) {
-		/* Logic channels, all in one channel group. */
-		cg = g_malloc0(sizeof(struct sr_channel_group));
-		cg->name = g_strdup("Logic");
-		for (i = 0; i < num_logic_channels; i++) {
-			sprintf(channel_name, "D%d", i);
-			ch = sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, channel_name);
-			cg->channels = g_slist_append(cg->channels, ch);
-		}
-		sdi->channel_groups = g_slist_append(NULL, cg);
-	}
+	/* Default non-zero values (if any) */
+	devc->fd = -1;
+	devc->tcp_buffer = 0;
 
-	devc->ch_ag = g_hash_table_new(g_direct_hash, g_direct_equal);
+	devc->read_timeout = 1000 * 1000;
+	//devc->beaglelogic = &beaglelogic_tcp_ops;
+	devc->address = g_strdup(params[1]);
+	devc->port = g_strdup(params[2]);
+	g_strfreev(params);
+
+	if (hp16700_open(devc) != SR_OK)
+		goto err_free;
+	//if (beaglelogic_tcp_detect(devc) != SR_OK)
+	if (hp16700_scan(devc) != SR_OK)
+		goto err_free;
+	if (hp16700_close(devc) != SR_OK)
+		goto err_free;
+	sr_info("BeagleLogic device found at %s : %s",
+		devc->address, devc->port);
+
+	/* Fill the channels */
+	for (i = 0; i < maxch; i++)
+		sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE,
+				channel_names[i]);
 
 	sdi->priv = devc;
 
 	return std_scan_complete(di, g_slist_append(NULL, sdi));
+
+err_free:
+	g_free(sdi->model);
+	g_free(sdi->version);
+	g_free(devc->address);
+	g_free(devc->port);
+	g_free(devc);
+	g_free(sdi);
+
+	return NULL;
 }
-
-static int dev_open(struct sr_dev_inst *sdi)
-{
-	struct dev_context *devc = sdi->priv;
-	struct addrinfo hints;
-	struct addrinfo *results, *res;
-	int err;
-
-	/* TODO: get handle from sdi->conn and open it. */
-	devc->address="192.168.0.47";
-	devc->port="6500";
-
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
-
-	err = getaddrinfo(devc->address, devc->port, &hints, &results);
-
-	if (err) {
-		sr_err("Address lookup failed: %s:%s: %s", devc->address,
-			devc->port, gai_strerror(err));
-		return SR_ERR;
-	}
-
-	for (res = results; res; res = res->ai_next) {
-		if ((devc->socket = socket(res->ai_family, res->ai_socktype,
-						res->ai_protocol)) < 0)
-			continue;
-		if (connect(devc->socket, res->ai_addr, res->ai_addrlen) != 0) {
-			close(devc->socket);
-			devc->socket = -1;
-			continue;
-		}
-		break;
-	}
-
-	freeaddrinfo(results);
-
-	if (devc->socket < 0) {
-		sr_err("Failed to connect to %s:%s: %s", devc->address,
-			devc->port, g_strerror(errno));
-		return SR_ERR;
-	}
-
-	return SR_OK;
-}
-
 static int dev_close(struct sr_dev_inst *sdi)
 {
 	(void)sdi;

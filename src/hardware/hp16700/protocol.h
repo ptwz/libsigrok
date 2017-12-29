@@ -84,6 +84,8 @@ struct dev_module {
 	
 };
 
+SR_PRIV int hp16700_open(struct sr_dev_inst *sdi);
+SR_PRIV int hp16700_close(struct sr_dev_inst *sdi);
 SR_PRIV int hp16700_receive_data(int fd, int revents, void *cb_data);
 SR_PRIV int hp16700_get_string(struct dev_context *devc, const char *cmd,
 				      char **tcp_resp);

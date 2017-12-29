@@ -20,7 +20,61 @@
 #include <config.h>
 #include "protocol.h"
 
-static int hp16700_send_cmd(struct dev_context *devc,
+SR_PRIV int hp16700_open(struct dev_context *devc)
+{
+	struct addrinfo hints;
+	struct addrinfo *results, *res;
+	int err;
+
+	/* TODO: get handle from sdi->conn and open it. */
+	devc->address="192.168.0.47";
+	devc->port="6500";
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+
+	err = getaddrinfo(devc->address, devc->port, &hints, &results);
+
+	if (err) {
+		sr_err("Address lookup failed: %s:%s: %s", devc->address,
+			devc->port, gai_strerror(err));
+		return SR_ERR;
+	}
+
+	for (res = results; res; res = res->ai_next) {
+		if ((devc->socket = socket(res->ai_family, res->ai_socktype,
+						res->ai_protocol)) < 0)
+			continue;
+		if (connect(devc->socket, res->ai_addr, res->ai_addrlen) != 0) {
+			close(devc->socket);
+			devc->socket = -1;
+			continue;
+		}
+		break;
+	}
+
+	freeaddrinfo(results);
+
+	if (devc->socket < 0) {
+		sr_err("Failed to connect to %s:%s: %s", devc->address,
+			devc->port, g_strerror(errno));
+		return SR_ERR;
+	}
+
+	return SR_OK;
+}
+
+SR_PRIV hp16700_close(struct dev_context *devc)
+{
+	if (devc->socked > 0) {
+		close(devc->socket);
+		devc->socket = 0;
+	}
+}
+
+SR_PRIV int hp16700_send_cmd(struct dev_context *devc,
 				    const char *format, ...)
 {
 	int len, out;
@@ -166,7 +220,7 @@ SR_PRIV int hp16700_get_string(struct dev_context *devc, const char *cmd,
 	return SR_OK;
 }
 
-static int hp16700_get_int(struct dev_context *devc,
+SR_PRIV int hp16700_get_int(struct dev_context *devc,
 				   const char *cmd, int *response)
 {
 	int ret;
@@ -193,8 +247,8 @@ SR_PRIV int hp16700_scan(struct dev_context *devc)
 	gchar **results;
 	gchar **line;
 	GRegex *split_rgx;
-	GError *err;
-
+	GError *err = NULL;
+	
 	split_rgx = g_regex_new(" +", 0, 0, &err);
 	if (err == NULL){
 		ret = hp16700_get_string(devc, "modules", &resp);
@@ -233,7 +287,7 @@ SR_PRIV int hp16700_scan(struct dev_context *devc)
 					case 4: // Model
 						module->model = g_strdup(*x);
 						break;
-					case 5: // Description
+					case 5: // description
 						module->description = g_strdup(*x);
 						break;
 				}
