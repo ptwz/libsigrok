@@ -261,7 +261,7 @@ SR_PRIV int hp16700_scan(struct dev_context *devc)
 	g_assert(devc->modules == NULL);
 	devc->modules = g_slist_alloc();
 
-	split_rgx = g_regex_new(" +", 0, 0, &err);
+	split_rgx = g_regex_new("[\" ]+", 0, 0, &err);
 	if (err == NULL){
 		ret = hp16700_get_strings(devc, "modules", &results, 10);
 		for (line = results; line != NULL; line = line->next){
@@ -278,13 +278,13 @@ SR_PRIV int hp16700_scan(struct dev_context *devc)
 			{
 				switch (col_num++){
 					case 0: // Type 
-						if (g_strcmp0(*x, "LA"))
+						if (g_strcmp0(*x, "LA")==0)
 							module->type = HP16700_LOGIC;
-						else if (g_strcmp0(*x, "SC"))
+						else if (g_strcmp0(*x, "SC")==0)
 							module->type = HP16700_SCOPE;
-						else if (g_strcmp0(*x, "PA"))
+						else if (g_strcmp0(*x, "PA")==0)
 							module->type = HP16700_PATTERN_GEN;
-						else if (g_strcmp0(*x, "EM"))
+						else if (g_strcmp0(*x, "EM")==0)
 							module->type = HP16700_EMU;
 						else module->type = HP16700_UNKNOWN;
 						break;

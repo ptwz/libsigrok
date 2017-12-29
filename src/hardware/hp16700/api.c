@@ -83,6 +83,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	struct sr_channel *ch;
 	const char *conn = NULL;
 	gchar **params;
+	int chan_type;
 	int channel_idx = 0;
 	int i = 0;
 
@@ -142,55 +143,55 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		devc->address, devc->port);
 
 	int module_base = 0;
-	struct sr_channel *chan = NULL;
 
 	for (l = devc->modules; l != NULL; l = l->next)
 	{
 		struct dev_module *module = l->data;
 		struct sr_channel_group *cg = NULL;
+		char group_name[1023];
 		
-		sr_info("HALLO");
-		sr_info("module = %04x, devc->modules=%04x", module, devc->modules);
 		if (module == NULL){
 			continue;
 		}
 		module_base += 1024;
 
-		char **changroup_names = NULL;
-		char **chan_names = NULL;
-		int chan_type;
+		char **changroup_names = {NULL};
+		char **chan_names = {NULL};
 
+		const char *names_scope[] = {"Analog", NULL};
+		const char *channels_scope[] = {"CH1", "CH2", NULL};
+
+		const char *names_16550A[] = {"1", "2", "3", "4", "5", "6", NULL};
+		const char *channels_16550A[] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", NULL};
 		if (module->type == HP16700_SCOPE)
 		{
 			chan_type = SR_CHANNEL_ANALOG;
-			const char *names[] = {"Analog", NULL};
-			const char *channels[] = { "CH1", "CH2", NULL};
-			changroup_names = (char **)names;
-			chan_names = (char **)channels;
+			changroup_names = (char **)names_scope;
+			chan_names = (char **)channels_scope;
 		}
-		else if (strcmp(module->name, "16550A") == 0)
+		else if (strcmp(module->model, "16550A") == 0)
 		{
 			chan_type = SR_CHANNEL_LOGIC;
-			const char *names[] = { "1", "2", "3", "4", "5", "6", NULL};
-			const char *channels[] = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", NULL };
-			changroup_names = (char **)names;
-			chan_names = (char **)channels;
+			changroup_names = (char **)names_16550A;
+			chan_names = (char **)channels_16550A;
 		}
 		for ( ; *changroup_names != NULL ; changroup_names++ )
 		{
-			char group_name[1024];
 			memset(group_name, 0, sizeof(group_name));
 			snprintf(group_name, sizeof(group_name)-1, "%s-%s", module->name, *changroup_names);
 
 			cg = g_malloc0(sizeof(struct sr_channel_group));
 			cg->name = g_strdup(group_name);
-			cg->priv = module; // TODO: any good?!
+			//cg->priv = module; // TODO: any good?!
 
 			channel_idx += 64;
 			i = 0;
-			for ( ; *chan_names != NULL ; chan_names++)
+			for ( char **name = chan_names ; *name != NULL ; name++)
 			{
-				ch = sr_channel_new(sdi, channel_idx + i, SR_CHANNEL_ANALOG,  1, *chan_names);
+				sr_info("8");
+				char channel_name[512];
+				snprintf(channel_name, sizeof(channel_name)-1, "%s.%s", module->slot, *name);
+				ch = sr_channel_new(sdi, channel_idx + i, chan_type,  1, channel_name);
 				cg->channels = g_slist_append(cg->channels, ch);
 				i++;
 
