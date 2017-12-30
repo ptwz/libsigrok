@@ -61,8 +61,14 @@ struct dev_context {
 	uint64_t num_analog_channels;
 
 	uint64_t logic_unitsize;
+	uint64_t limit_frames;
 	GSList *modules;
 };
+
+struct hp16700_bin_hdr {
+		uint32_t frame_count;       // in Network Byte Order
+	       	uint32_t bytes_per_record;  // -''-
+	} __attribute__((packed));
 
 enum hp16700_module_type{
 	HP16700_UNKNOWN=0,
@@ -79,10 +85,21 @@ struct dev_module {
 	gchar *name;
 	gchar *model;
 	gchar *description;
+	gboolean enabled;
 	uint64_t max_sample_rate;
 	uint16_t num_channels;
-	
+	uint64_t sample_rate;
+	uint64_t num_samples;
+
+	double timeunit;
+	GHashTable *label_infos;
 };
+
+/* Defines a combination of module/pod for setting purposes */
+struct hp_channel_group {
+	struct dev_module *module;
+	char **channel_names;
+	};
 
 SR_PRIV int hp16700_open(struct dev_context *devc);
 SR_PRIV int hp16700_close(struct dev_context *devc);
@@ -97,5 +114,8 @@ SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 				     int maxlen);
 SR_PRIV int hp16700_drain(struct dev_context *devc);
 SR_PRIV int hp16700_scan(struct dev_context *devc);
+SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *module);
+SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
+				      uint8_t **data);
 
 #endif

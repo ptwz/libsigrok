@@ -18,6 +18,7 @@
  */
 
 #include <config.h>
+#include <arpa/inet.h>
 #include "protocol.h"
 
 SR_PRIV int hp16700_open(struct dev_context *devc)
@@ -235,6 +236,8 @@ SR_PRIV int hp16700_get_int(struct dev_context *devc,
 	int ret;
 	GSList *resp = NULL;
 
+	(void)response;
+
 	ret = hp16700_get_strings(devc, cmd, &resp, 1);
 	if (!resp && ret != SR_OK)
 		return ret;
@@ -247,6 +250,107 @@ SR_PRIV int hp16700_get_int(struct dev_context *devc,
 	g_free(resp);
 */
 	return ret;
+}
+
+SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *module)
+{
+	char cmd[1024];
+	gchar **label_set;
+	GSList *resp = NULL;
+	GSList *curline;
+	int res;
+	int i;
+	gboolean in_fields = FALSE;
+
+	if (module->type == HP16700_LOGIC)
+		snprintf(cmd, sizeof(cmd)-1, "analyzer -n %s -i", module->name);
+	else
+		snprintf(cmd, sizeof(cmd)-1, "scope -n %s -i", module->name);
+
+	res = hp16700_get_strings(devc, cmd, &resp, 7);
+	if (res != SR_OK)
+		return res;
+	
+	/** Sample:
+	  * Run ID: 515220299
+	  * States: -16383..16384
+	  * Times:  -1.638375e-05..1.638425e-05
+	  * 3 labels
+	  * "State Number" 32 bits signed integer
+	  * "Time" 64 bits signed integer timescale picoseconds
+	  * "Channel E1" 15 bits yincrement 1.2747e-05 (volts/bit) yorigin -2.0803e-01
+	  * ->
+	  */
+	for (curline = resp; curline != NULL; curline = curline->next){
+		if ( curline->data == NULL )
+			continue;
+		if (g_regex_match_simple("^States", curline->data, 0, 0)){
+		} 
+		else if (g_regex_match_simple("^Times", curline->data, 0, 0)){
+		} 
+		else if (g_regex_match_simple(" labels$", curline->data, 0, 0)){
+			in_fields = TRUE;
+			if ( module->label_infos != NULL)
+			{
+				g_hash_table_destroy(module->label_infos);
+			}
+			module->label_infos = g_hash_table_new(g_str_hash, g_str_equal);
+		}
+		else if (in_fields){
+			label_set = g_strsplit(curline->data, "\"", 0);
+			
+			sr_info("in labels:");
+			for ( i=0 ; label_set[i] != NULL; i++)
+				sr_info("%s", g_strstrip(label_set[i]));
+
+			g_hash_table_insert(module->label_infos, label_set[0], label_set[1]);
+			g_strfreev(label_set);
+		}
+	}
+	g_slist_free_full(resp, g_free);
+	return res;
+}
+
+SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
+				      uint8_t **data)
+{
+	int len, expected_len;
+	gint64 timeout;
+	struct hp16700_bin_hdr hdr;
+
+	if (cmd) {
+		if (hp16700_send_cmd(devc, cmd) != SR_OK)
+			return SR_ERR;
+	}
+
+	timeout = g_get_monotonic_time() + devc->read_timeout;
+
+	// TODO: Make sure the whole header is read
+	len = hp16700_read_data(devc, (char *)&hdr, sizeof(hdr));
+	
+	if (len != sizeof(hdr)){
+		sr_err("Error reading binary data.");
+		return SR_ERR;
+	}
+	
+	expected_len = htonl(hdr.bytes_per_record) * htonl( hdr.frame_count );
+	*data = g_malloc(expected_len);
+
+	len = hp16700_read_data(devc, (char *)*data, expected_len);
+
+	if (len < expected_len) {
+		g_free( *data );
+		return SR_ERR;
+	}
+
+	if (g_get_monotonic_time() > timeout) {
+		sr_err("Timed out waiting for response.");
+		g_free(*data);
+		*data = NULL;
+		return SR_ERR_TIMEOUT;
+	}
+
+	return SR_OK;
 }
 
 SR_PRIV int hp16700_scan(struct dev_context *devc)
@@ -292,7 +396,7 @@ SR_PRIV int hp16700_scan(struct dev_context *devc)
 						module->slot = g_strdup(*x);
 						break;
 					case 2: // State
-						//TODO: Use or discard?!
+						module->enabled = (**x == '1') ? TRUE:FALSE;
 						break;
 					case 3: // Name
 						module->name = g_strdup(*x);

@@ -19,21 +19,9 @@
 
 #include <config.h>
 #include "protocol.h"
-/* Note: No spaces allowed because of sigrok-cli. */
-static const char *logic_pattern_str[] = {
-	"sigrok",
-	"random",
-	"incremental",
-	"walking-one",
-	"walking-zero",
-	"all-low",
-	"all-high",
-	"squid",
-};
-
 static const uint32_t scanopts[] = {
 	SR_CONF_CONN,
-	SR_CONF_NUM_LOGIC_CHANNELS,
+//	SR_CONF_NUM_LOGIC_CHANNELS,
 //	SR_CONF_NUM_ANALOG_CHANNELS,
 };
 
@@ -45,12 +33,12 @@ static const uint32_t drvopts[] = {
 static const uint32_t devopts[] = {
 	SR_CONF_CONTINUOUS,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_LIMIT_MSEC | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+//	SR_CONF_LIMIT_MSEC | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_SAMPLERATE | SR_CONF_GET //| SR_CONF_LIST,
 };
 
 static const uint32_t devopts_cg_logic[] = {
-	SR_CONF_PATTERN_MODE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+//	SR_CONF_PATTERN_MODE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 };
 
 static const uint32_t devopts_cg_analog_group[] = {
@@ -58,15 +46,9 @@ static const uint32_t devopts_cg_analog_group[] = {
 };
 
 static const uint32_t devopts_cg_analog_channel[] = {
-	SR_CONF_PATTERN_MODE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	//SR_CONF_PATTERN_MODE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_AMPLITUDE | SR_CONF_GET | SR_CONF_SET,
 };
-
-#define DEFAULT_NUM_LOGIC_CHANNELS	8
-#define DEFAULT_LOGIC_PATTERN		PATTERN_SIGROK
-
-#define DEFAULT_NUM_ANALOG_CHANNELS	0
-#define DEFAULT_ANALOG_AMPLITUDE	10
 
 static const uint64_t samplerates[] = {
 	SR_HZ(1),
@@ -81,6 +63,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
 	struct sr_channel *ch;
+	struct hp_channel_group *grp;
 	const char *conn = NULL;
 	gchar **params;
 	int chan_type;
@@ -156,7 +139,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		module_base += 1024;
 
 		char **changroup_names = {NULL};
-		char **chan_names = {NULL};
+		char **group_names = {NULL};
 
 		const char *names_scope[] = {"Analog", NULL};
 		const char *channels_scope[] = {"CH1", "CH2", NULL};
@@ -167,31 +150,37 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		{
 			chan_type = SR_CHANNEL_ANALOG;
 			changroup_names = (char **)names_scope;
-			chan_names = (char **)channels_scope;
+			group_names = (char **)channels_scope;
 		}
 		else if (strcmp(module->model, "16550A") == 0)
 		{
 			chan_type = SR_CHANNEL_LOGIC;
 			changroup_names = (char **)names_16550A;
-			chan_names = (char **)channels_16550A;
+			group_names = (char **)channels_16550A;
 		}
 		for ( ; *changroup_names != NULL ; changroup_names++ )
 		{
 			memset(group_name, 0, sizeof(group_name));
+			
 			snprintf(group_name, sizeof(group_name)-1, "%s-%s", module->name, *changroup_names);
 
 			cg = g_malloc0(sizeof(struct sr_channel_group));
 			cg->name = g_strdup(group_name);
-			//cg->priv = module; // TODO: any good?!
+
+			grp = g_new0(struct hp_channel_group, 1);
+			grp->module = module;
+			grp->channel_names = g_strdupv(group_names);
+
+			cg->priv = grp;
 
 			channel_idx += 64;
 			i = 0;
-			for ( char **name = chan_names ; *name != NULL ; name++)
+			for ( char **name = group_names ; *name != NULL ; name++)
 			{
-				sr_info("8");
 				char channel_name[512];
-				snprintf(channel_name, sizeof(channel_name)-1, "%s.%s", module->slot, *name);
+				snprintf(channel_name, sizeof(channel_name)-1, "%s.%s.%s", module->slot, *changroup_names, *name);
 				ch = sr_channel_new(sdi, channel_idx + i, chan_type,  1, channel_name);
+				sr_dev_channel_enable(ch, module->enabled);
 				cg->channels = g_slist_append(cg->channels, ch);
 				i++;
 
@@ -199,10 +188,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 			sdi->channel_groups = g_slist_append(sdi->channel_groups, cg);
 		}
 	}
-	/* Fill the channels */
-	//for (i = 0; i < maxch; i++)
-	//	sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE,
-	//			channel_names[i]);
 
 	sdi->priv = devc;
 
@@ -279,6 +264,16 @@ static int config_get(uint32_t key, GVariant **data,
 
 	ret = SR_OK;
 	switch (key) {
+		case SR_CONF_LIMIT_SAMPLES:
+			// TBD
+			sr_info("LIMIT_FRAMES");
+			return SR_ERR_NA;
+			break;
+		case SR_CONF_SAMPLERATE:
+			return SR_ERR_NA;
+		break;
+			return SR_ERR_NA;
+			break;
 	/* TODO */
 	default:
 		return SR_ERR_NA;
@@ -287,45 +282,29 @@ static int config_get(uint32_t key, GVariant **data,
 	return ret;
 }
 
-//TODO: Warum **data (from demo/api.c)?!
-static int config_set(uint32_t key, GVariant **data,
+static int config_set(uint32_t key, GVariant *data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	int ret = SR_ERR_NA;
-	struct sr_channel *ch;
-	
-	if (!cg) {
-		switch (key) {
-		case SR_CONF_SCAN_OPTIONS:
-		case SR_CONF_DEVICE_OPTIONS:
-			return STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
-		case SR_CONF_SAMPLERATE:
-			*data = std_gvar_samplerates_steps(ARRAY_AND_SIZE(samplerates));
-			break;
-		default:
-			return SR_ERR_NA;
-		}
-	} else {
-		ch = cg->channels->data;
-		switch (key) {
-		case SR_CONF_DEVICE_OPTIONS:
-			if (ch->type == SR_CHANNEL_LOGIC)
-				*data = std_gvar_array_u32(ARRAY_AND_SIZE(devopts_cg_logic));
-			else if (ch->type == SR_CHANNEL_ANALOG) {
-				if (strcmp(cg->name, "Analog") == 0)
-					*data = std_gvar_array_u32(ARRAY_AND_SIZE(devopts_cg_analog_group));
-				else
-					*data = std_gvar_array_u32(ARRAY_AND_SIZE(devopts_cg_analog_channel));
-			}
-			else
-				return SR_ERR_BUG;
-			break;
-		default:
-			return SR_ERR_NA;
-		}
+	struct dev_context *devc;
+
+	devc = sdi->priv;
+
+	/* If a channel group is specified, it must be a valid one. */
+	if (cg && !g_slist_find(sdi->channel_groups, cg)) {
+		sr_err("Invalid channel group specified.");
+		return SR_ERR;
 	}
 
-	return ret;
+	switch (key) {
+	case SR_CONF_LIMIT_SAMPLES:
+		sr_info("LIMIT");
+		devc->limit_frames = g_variant_get_uint64(data);
+		break;
+	default:
+		return SR_ERR_NA;
+	}
+
+	return SR_OK;
 }
 
 static int config_list(uint32_t key, GVariant **data,
@@ -367,14 +346,7 @@ static int config_list(uint32_t key, GVariant **data,
 			break;
 		case SR_CONF_PATTERN_MODE:
 			/* The analog group (with all 4 channels) shall not have a pattern property. */
-			if (strcmp(cg->name, "Analog") == 0)
-				return SR_ERR_NA;
-			// TODO: Channel list from analyzer
-			if (ch->type == SR_CHANNEL_LOGIC)
-				*data = g_variant_new_strv(ARRAY_AND_SIZE(logic_pattern_str));
-			else
-				return SR_ERR_NA;
-			break;
+			return SR_ERR_NA;
 		default:
 			return SR_ERR_NA;
 		}
@@ -385,19 +357,63 @@ static int config_list(uint32_t key, GVariant **data,
 
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
-	/* TODO: configure hardware, reset acquisition state, set up
-	 * callbacks and send header packet. */
+	struct dev_context *devc = sdi->priv;
+	GSList *l;
+	struct sr_trigger *trigger;
+	struct sr_channel *channel;
 
-	(void)sdi;
+	/* Clear capture state */
+	hp16700_get_scope_info(devc, devc->modules->next->data);
 
+	/* Configure channels */
+	/*
+	for (l = sdi->channels; l; l = l->next) {
+		channel = l->data;
+		if (channel->index >= 8 && channel->enabled)
+			devc->sampleunit = BL_SAMPLEUNIT_16_BITS;
+	}
+	devc->beaglelogic->set_sampleunit(devc);
+	*/
+	/* If continuous sampling, set the limit_samples to max possible value */
+	/*
+	if (devc->triggerflags == BL_TRIGGERFLAGS_CONTINUOUS)
+		devc->limit_samples = (uint64_t)-1;
+	*/
+	/* Configure triggers & send header packet */
+	/*
+	if ((trigger = sr_session_trigger_get(sdi->session))) {
+		int pre_trigger_samples = 0;
+		if (devc->limit_samples > 0)
+			pre_trigger_samples = (devc->capture_ratio * devc->limit_samples) / 100;
+		devc->stl = soft_trigger_logic_new(sdi, trigger, pre_trigger_samples);
+		if (!devc->stl)
+			return SR_ERR_MALLOC;
+		devc->trigger_fired = FALSE;
+	} else
+		devc->trigger_fired = TRUE;
+	std_session_send_df_header(sdi);
+	*/
+
+	/* Trigger and add poll on file */
+	/*
+	devc->beaglelogic->start(devc);
+	if (devc->beaglelogic == &beaglelogic_native_ops)
+		sr_session_source_add_pollfd(sdi->session, &devc->pollfd,
+			BUFUNIT_TIMEOUT_MS(devc), beaglelogic_native_receive_data,
+			(void *)sdi);
+	else
+		sr_session_source_add_pollfd(sdi->session, &devc->pollfd,
+			BUFUNIT_TIMEOUT_MS(devc), beaglelogic_tcp_receive_data,
+			(void *)sdi);
+	*/
 	return SR_OK;
 }
-
 static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	/* TODO: stop acquisition. */
 
 	(void)sdi;
+	sr_info("dev_acquisition_stop");
 
 	return SR_OK;
 }
