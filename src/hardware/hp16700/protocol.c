@@ -19,6 +19,7 @@
 
 #include <config.h>
 #include <arpa/inet.h>
+#include <stdlib.h>
 #include "protocol.h"
 
 SR_PRIV int hp16700_open(struct dev_context *devc)
@@ -190,7 +191,7 @@ SR_PRIV int hp16700_get_strings(struct dev_context *devc, const char *cmd,
 	timeout = g_get_monotonic_time() + devc->read_timeout;
 
 	*tcp_resp = g_slist_alloc();
-	
+
 	while (linecount-- > 0)
 	{
 		GString *cur_line = g_string_sized_new(1024);
@@ -252,14 +253,102 @@ SR_PRIV int hp16700_get_int(struct dev_context *devc,
 	return ret;
 }
 
+SR_PRIV void hp16700_free_label_descriptor(void *field)
+{
+	struct hp_data_label *label = field;
+	g_assert(label != NULL);
+	g_assert(label->name != NULL);
+
+	g_free(label->name);
+	g_free(label);
+}
+
+SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string)
+{
+	// Reads one label from the input and creates label descriptor
+	/*
+	 * 3 labels
+	 * "State Number" 32 bits signed integer
+	 * "Time" 64 bits signed integer timescale picoseconds
+	 * "Channel E1" 15 bits yincrement 1.2747e-05 (volts/bit) yorigin -2.0803e-01
+	 */
+	gchar *name, *descriptor;
+	gchar **label_set = g_strsplit(label_string, "\"", 0);
+	gchar **descriptor_words;
+	struct hp_data_label r;
+	int i;
+
+	memset(&r, 0, sizeof(r));
+	r.factor = 1.0;
+	r.offset = 0;
+
+	g_assert( g_strv_length(label_set) == 3);
+	name = g_strstrip( label_set[1] );
+	descriptor = g_strstrip( label_set[2] );
+
+	descriptor_words = g_strsplit(descriptor, " ", 0);
+	g_assert( g_strv_length(descriptor_words) > 2);
+
+	r.name = g_strdup(name);
+	r.bits = atoi(descriptor_words[0]);
+	g_assert( strcmp(descriptor_words[1], "bits") == 0 );
+
+	for (i=0; descriptor_words[i]!=NULL; i++)
+	{
+		sr_info("word = '%s'", descriptor_words[i]);
+		if (strcmp(descriptor_words[i], "integer") == 0)
+		{
+			//
+		}
+		else if (strcmp(descriptor_words[i], "unsigned") == 0)
+		{
+			r.is_signed = FALSE;
+		}
+		else if (strcmp(descriptor_words[i], "signed") == 0)
+		{
+			r.is_signed = TRUE;
+		}
+		else if (strcmp(descriptor_words[i], "picoseconds") == 0)
+		{
+			r.factor = 10.0e-12;
+		}
+		else if (strcmp(descriptor_words[i], "nanoseconds") == 0)
+		{
+			r.factor = 10.0e-9;
+		}
+		else if (strcmp(descriptor_words[i], "microseconds") == 0)
+		{
+			r.factor = 10.0e-6;
+		}
+		else if (strcmp(descriptor_words[i], "milliseconds") == 0)
+		{
+			r.factor = 10.0e-3;
+		}
+		else if (strcmp(descriptor_words[i], "yincrement") == 0)
+		{ // TODO: Maybe add assertion to check if next field is there...
+			r.factor = atof(descriptor_words[i+1]);
+		}
+		else if (strcmp(descriptor_words[i], "yorigin") == 0)
+		{
+			r.offset = atof(descriptor_words[i+1]);
+		}
+	}
+
+	g_strfreev(label_set);
+	return( g_memdup(&r, sizeof(r)) );
+}
+
+SR_PRIV void hp16700_parse_sentence(GSList )
+{
+}
+
 SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *module)
 {
 	char cmd[1024];
-	gchar **label_set;
 	GSList *resp = NULL;
 	GSList *curline;
+	gchar **fields, **min_max;
 	int res;
-	int i;
 	gboolean in_fields = FALSE;
 
 	if (module->type == HP16700_LOGIC)
@@ -270,7 +359,7 @@ SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *
 	res = hp16700_get_strings(devc, cmd, &resp, 7);
 	if (res != SR_OK)
 		return res;
-	
+
 	/** Sample:
 	  * Run ID: 515220299
 	  * States: -16383..16384
@@ -284,28 +373,42 @@ SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *
 	for (curline = resp; curline != NULL; curline = curline->next){
 		if ( curline->data == NULL )
 			continue;
+		fields = g_regex_split_simple(" +", curline->data, 0, 0);
 		if (g_regex_match_simple("^States", curline->data, 0, 0)){
-		} 
+			g_assert( g_strv_length(fields) == 2 );
+
+			min_max = g_strsplit( fields[1], "..", 0);
+			g_assert (g_strv_length( min_max) );
+			module->states_min = atoi(min_max[0]);
+			module->states_max = atoi(min_max[1]);
+
+			g_strfreev(min_max);
+		}
 		else if (g_regex_match_simple("^Times", curline->data, 0, 0)){
-		} 
+			g_assert( g_strv_length(fields) == 2 );
+
+			min_max = g_strsplit( fields[1], "..", 0);
+			g_assert (g_strv_length( min_max ) );
+			module->time_min = atof(min_max[0]);
+			module->time_max = atof(min_max[1]);
+
+			g_strfreev(min_max);
+		}
 		else if (g_regex_match_simple(" labels$", curline->data, 0, 0)){
 			in_fields = TRUE;
 			if ( module->label_infos != NULL)
 			{
-				g_hash_table_destroy(module->label_infos);
+				g_slist_free_full(module->label_infos, hp16700_free_label_descriptor);
 			}
-			module->label_infos = g_hash_table_new(g_str_hash, g_str_equal);
+			module->label_infos = g_slist_alloc();
 		}
 		else if (in_fields){
-			label_set = g_strsplit(curline->data, "\"", 0);
-			
-			sr_info("in labels:");
-			for ( i=0 ; label_set[i] != NULL; i++)
-				sr_info("%s", g_strstrip(label_set[i]));
+			// TODO use label descriptor
+			hp16700_parse_label_descriptor(curline->data);
 
-			g_hash_table_insert(module->label_infos, label_set[0], label_set[1]);
-			g_strfreev(label_set);
+			//g_hash_table_insert(module->label_infos, label_set[0], label_set[1]);
 		}
+		g_strfreev(fields);
 	}
 	g_slist_free_full(resp, g_free);
 	return res;
@@ -327,12 +430,12 @@ SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
 
 	// TODO: Make sure the whole header is read
 	len = hp16700_read_data(devc, (char *)&hdr, sizeof(hdr));
-	
+
 	if (len != sizeof(hdr)){
 		sr_err("Error reading binary data.");
 		return SR_ERR;
 	}
-	
+
 	expected_len = htonl(hdr.bytes_per_record) * htonl( hdr.frame_count );
 	*data = g_malloc(expected_len);
 
@@ -360,7 +463,7 @@ SR_PRIV int hp16700_scan(struct dev_context *devc)
 	GSList *results = NULL;
 	GSList *line = NULL;
 	GError *err = NULL;
-	
+
 	sr_info("hp16700_scan");
 	g_assert(devc->modules == NULL);
 	devc->modules = g_slist_alloc();
@@ -381,7 +484,7 @@ SR_PRIV int hp16700_scan(struct dev_context *devc)
 			for (gchar** x = columns; *x != NULL; x++)
 			{
 				switch (col_num++){
-					case 0: // Type 
+					case 0: // Type
 						if (g_strcmp0(*x, "LA")==0)
 							module->type = HP16700_LOGIC;
 						else if (g_strcmp0(*x, "SC")==0)

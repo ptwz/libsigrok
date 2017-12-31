@@ -92,7 +92,24 @@ struct dev_module {
 	uint64_t num_samples;
 
 	double timeunit;
-	GHashTable *label_infos;
+	GSList *label_infos;
+
+	uint64_t states_min;
+	uint64_t states_max;
+
+	double time_min;
+	double time_max;
+};
+
+struct hp_data_label {
+	// Describes one field of the analyzer's output
+	gchar *name;
+	int bits;
+	int bytes;
+	gboolean is_signed;
+
+	double factor;
+	double offset;
 };
 
 /* Defines a combination of module/pod for setting purposes */
@@ -117,5 +134,7 @@ SR_PRIV int hp16700_scan(struct dev_context *devc);
 SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *module);
 SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
 				      uint8_t **data);
+SR_PRIV void hp16700_free_label_descriptor(void *field);
+SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string);
 
 #endif

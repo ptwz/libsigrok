@@ -358,9 +358,9 @@ static int config_list(uint32_t key, GVariant **data,
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc = sdi->priv;
-	GSList *l;
-	struct sr_trigger *trigger;
-	struct sr_channel *channel;
+	//GSList *l;
+	//struct sr_trigger *trigger;
+	//struct sr_channel *channel;
 
 	/* Clear capture state */
 	hp16700_get_scope_info(devc, devc->modules->next->data);
