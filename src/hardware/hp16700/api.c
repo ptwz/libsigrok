@@ -132,7 +132,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		struct dev_module *module = l->data;
 		struct sr_channel_group *cg = NULL;
 		char group_name[1023];
-		
+
 		if (module == NULL){
 			continue;
 		}
@@ -161,7 +161,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		for ( ; *changroup_names != NULL ; changroup_names++ )
 		{
 			memset(group_name, 0, sizeof(group_name));
-			
+
 			snprintf(group_name, sizeof(group_name)-1, "%s-%s", module->name, *changroup_names);
 
 			cg = g_malloc0(sizeof(struct sr_channel_group));
@@ -358,12 +358,17 @@ static int config_list(uint32_t key, GVariant **data,
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc = sdi->priv;
+	uint8_t *data;
 	//GSList *l;
 	//struct sr_trigger *trigger;
 	//struct sr_channel *channel;
 
 	/* Clear capture state */
 	hp16700_get_scope_info(devc, devc->modules->next->data);
+
+	if (hp16700_get_binary(devc, "scope -n Scope<A> -d", &data) != SR_OK)
+		return SR_ERR;
+
 
 	/* Configure channels */
 	/*
@@ -406,6 +411,8 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 			BUFUNIT_TIMEOUT_MS(devc), beaglelogic_tcp_receive_data,
 			(void *)sdi);
 	*/
+	//sr_session_source_add(sdi->session, -1, 0, 500, sigma_receive_data, (void *)sdi);
+
 	return SR_OK;
 }
 static int dev_acquisition_stop(struct sr_dev_inst *sdi)

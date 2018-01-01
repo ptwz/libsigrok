@@ -55,6 +55,7 @@ struct dev_context {
 	int socket;
 	unsigned int read_timeout;
 	unsigned char *tcp_buffer;
+	unsigned int buffer_len;
 
 	uint64_t cur_samplerate;
 	uint64_t num_logic_channels;
@@ -128,7 +129,7 @@ SR_PRIV int hp16700_get_int(struct dev_context *devc,
 SR_PRIV int hp16700_send_cmd(struct dev_context *devc,
 				    const char *format, ...);
 SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
-				     int maxlen);
+				     int maxlen, gboolean text);
 SR_PRIV int hp16700_drain(struct dev_context *devc);
 SR_PRIV int hp16700_scan(struct dev_context *devc);
 SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *module);
