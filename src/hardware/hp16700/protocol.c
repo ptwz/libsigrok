@@ -120,7 +120,7 @@ SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 				     int maxlen, gboolean text)
 {
 	int len, remain_len, recvd_len;
-	char *recv_tmp = g_malloc0( maxlen + 1);
+	char *recv_tmp = g_malloc0( maxlen + devc->buffer_len + 1);
 	char *inptr = recv_tmp;
 	char *outptr;
 
@@ -128,7 +128,25 @@ SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 	recvd_len = 0;
 	if (text)
 		sr_info("Looking for text");
-	do
+
+	if (devc->tcp_buffer != NULL) {
+		sr_info("have some buffer len=%d", devc->buffer_len);
+
+		g_assert( devc->buffer_len > 0 );
+
+		remain_len -= devc->buffer_len;
+
+		memcpy( inptr, devc->tcp_buffer, devc->buffer_len );
+		inptr += devc->buffer_len;
+
+		recvd_len = devc->buffer_len;
+
+		g_free(devc->tcp_buffer);
+		devc->tcp_buffer = NULL;
+	}
+
+	while ( ( ( text && ( strchr(recv_tmp, 0x0a) == NULL ) ) && (remain_len > 0) )
+			|| (!text && (remain_len > 0) ) )
 	{
 		len = recv(devc->socket, inptr, remain_len, 0);
 		sr_info("recv'd len=%d, value='%s'", len, recv_tmp);
@@ -142,27 +160,7 @@ SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 		recvd_len += len;
 		inptr += len;
 	}
-	while ( text
-		 && ( strchr(recv_tmp, 0x0a) == NULL )
-//		 && ( strchr(recv_tmp, '\r') == NULL )
-		 && (remain_len > 0) );
 
-	if (devc->tcp_buffer != NULL) {
-		sr_info("have some buffer len=%d", devc->buffer_len);
-		g_assert( devc->buffer_len > 0 );
-		inptr = g_malloc0( devc->buffer_len + recvd_len );
-
-		memcpy( inptr,                    devc->tcp_buffer, devc->buffer_len );
-		memcpy( &inptr[devc->buffer_len], recv_tmp,         recvd_len );
-
-		recvd_len += devc->buffer_len;
-
-		g_free( recv_tmp );
-		recv_tmp = inptr;
-
-		g_free(devc->tcp_buffer);
-		devc->tcp_buffer = NULL;
-	}
 
 	if (text && (strchr(recv_tmp, '\n') != NULL) )
 	{
@@ -218,6 +216,7 @@ SR_PRIV int hp16700_drain(struct dev_context *devc)
 	if (devc->tcp_buffer != NULL)
 	{
 		g_free(devc->tcp_buffer);
+		devc->tcp_buffer = NULL;
 		devc->buffer_len = 0;
 	}
 	do {
