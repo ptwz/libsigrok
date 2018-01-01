@@ -174,8 +174,12 @@ SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 		{
 			*outptr = *inptr;
 		}
-		devc->tcp_buffer = g_memdup(inptr, recvd_len);
-		devc->buffer_len = recvd_len;
+		if (recvd_len > 0)
+		{
+			sr_info("Some data was left: %d, '%s'", recvd_len, inptr);
+			devc->tcp_buffer = g_memdup(inptr, recvd_len);
+			devc->buffer_len = recvd_len;
+		}
 	} else
 	{
 		sr_info("Text without newline/too big");
@@ -544,6 +548,7 @@ SR_PRIV int hp16700_scan(struct dev_context *devc)
 	GSList *results = NULL;
 	GSList *line = NULL;
 	GError *err = NULL;
+	gchar **columns;
 
 	sr_info("hp16700_scan");
 	g_assert(devc->modules == NULL);
@@ -556,7 +561,6 @@ SR_PRIV int hp16700_scan(struct dev_context *devc)
 			struct dev_module *module = g_malloc0(sizeof(struct dev_module));
 			if (line->data == NULL)
 				continue;
-			gchar **columns;
 			columns = g_regex_split_full(split_rgx, (char*)line->data, -1, 0, 0, 6, &err);
 			g_assert(err==NULL);
 			int col_num=0;
