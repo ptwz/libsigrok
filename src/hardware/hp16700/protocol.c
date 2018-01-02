@@ -22,6 +22,17 @@
 #include <stdlib.h>
 #include "protocol.h"
 
+SR_PRIV int bit_to_bytes(int bits)
+{
+	int r;
+
+	for (r=0; bits>0; r++)
+	{
+		bits -= 8;
+	}
+	return r;
+}
+
 SR_PRIV int hp16700_open(struct dev_context *devc)
 {
 	struct addrinfo hints;
@@ -160,7 +171,6 @@ SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 		recvd_len += len;
 		inptr += len;
 	}
-
 
 	if (text && (strchr(recv_tmp, '\n') != NULL) )
 	{
@@ -338,7 +348,8 @@ SR_PRIV void hp16700_free_label_descriptor(void *field)
 	g_free(label);
 }
 
-SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string)
+SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string,
+		struct dev_module *parent)
 {
 	// Reads one label from the input and creates label descriptor
 	/*
@@ -356,6 +367,7 @@ SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string
 	memset(&r, 0, sizeof(r));
 	r.factor = 1.0;
 	r.offset = 0;
+	r.parent = parent;
 
 	g_assert( g_strv_length(label_set) == 3);
 	name = g_strstrip( label_set[1] );
@@ -366,6 +378,7 @@ SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string
 
 	r.name = g_strdup(name);
 	r.bits = atoi(descriptor_words[0]);
+	r.bytes = bit_to_bytes(r.bits);
 	g_assert( strcmp(descriptor_words[1], "bits") == 0 );
 
 	for (i=0; descriptor_words[i]!=NULL; i++)
@@ -413,11 +426,6 @@ SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string
 	return( g_memdup(&r, sizeof(r)) );
 }
 
-/*
-SR_PRIV void hp16700_parse_sentence(GSList )
-{
-}
-*/
 SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *module)
 {
 	char cmd[1024];
@@ -480,7 +488,7 @@ SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *
 		}
 		else if (in_fields){
 			module->label_infos = g_slist_append(module->label_infos,
-					hp16700_parse_label_descriptor(curline->data));
+					hp16700_parse_label_descriptor(curline->data, module));
 
 		}
 		g_strfreev(fields);
@@ -488,20 +496,143 @@ SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *
 	g_slist_free_full(resp, g_free);
 	return res;
 }
-/*
-SR_PRIV void hp16700_parse_binary_stream(struct dev_module *module,
-		int num_samples, int sample_size, void *buffer)
-{
-	int i;
 
+
+SR_PRIV void hp16700_parse_binary_stream(struct dev_module *module,
+		int num_samples, uint8_t *buffer)
+{
+	int i, j;
+	GSList *field;
+	struct hp_data_label *labelinfo;
+
+	sr_info("hp16700_parse_binary_stream num_samples=%d", num_samples);
+	for (field = module->label_infos; field != NULL ; field = field->next)
+	{
+		if (field->data == NULL)
+			continue;
+		labelinfo = field->data;
+		if (labelinfo->raw_buffer != NULL)
+			g_free(labelinfo->raw_buffer);
+
+		labelinfo->raw_buffer = g_malloc0( labelinfo->bytes * num_samples );
+		labelinfo->load_ptr = labelinfo->raw_buffer;
+		labelinfo->num_samples = num_samples;
+	}
+
+	for (i=0; i<num_samples; i++)
+	{
+		g_assert(module->label_infos != NULL);
+		for (field = module->label_infos; field != NULL ; 
+				field = field->next)
+		{
+			if (field->data == NULL)
+				continue;
+			labelinfo = field->data;
+
+			for (j=0; j<labelinfo->bytes; j++)
+			{
+				*((labelinfo->load_ptr)++) = *(buffer++);
+			}
+		}
+	}
 }
-*/
+
+static struct sr_channel *find_channel(GSList *channellist, const char *channelname)
+{
+	struct sr_channel *ch;
+	GSList *l;
+
+	ch = NULL;
+	for (l = channellist; l; l = l->next) {
+		ch = l->data;
+		if (!strcmp(ch->name, channelname))
+			break;
+	}
+	ch = l ? l->data : NULL;
+
+	return ch;
+}
+
+SR_PRIV int hp16700_fetch_scope_data(struct sr_dev_inst *sdi, struct dev_module *module)
+{
+	struct dev_context *devc = sdi->priv;
+	char cmd[1025];
+	uint8_t *data;
+	uint32_t bytes_per_frame;
+	uint32_t frame_count;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_datafeed_packet packet;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
+	GSList *channel_list;
+	GSList *l;
+	struct hp_data_label *labelinfo;
+	struct sr_channel *ch;
+
+	//hp16700_fetch_scope_data(devc, module);
+
+	memset(cmd, 0, sizeof(cmd));
+	snprintf(cmd, sizeof(cmd)-1, "scope -n %s -d", module->name);
+
+	if (hp16700_get_binary(devc, cmd, &frame_count, &bytes_per_frame, &data) 
+			!= SR_OK)
+		return SR_ERR;
+	
+	hp16700_parse_binary_stream(module, frame_count, data);
+
+	sr_analog_init(&analog, &encoding, &meaning, &spec, 4);
+
+	channel_list = sr_dev_inst_channels_get(sdi);
+
+	for (l = module->label_infos ; l != NULL ; l = l->next )
+	{
+		if (l->data == NULL)
+			continue;
+		labelinfo = l->data;
+
+		ch = find_channel(channel_list, labelinfo->name);
+		if ( ch == NULL ) 
+		{
+			sr_info("Skipping label %s because it does not seem to be a channel", labelinfo->name);
+			continue;
+		}
+
+		if ( labelinfo->num_samples == 0 )
+		{
+			sr_info("Skipping label: %s, no samples", labelinfo->name);
+			continue;
+		}
+		encoding.unitsize = labelinfo->bytes;
+		encoding.is_bigendian = TRUE;
+		encoding.is_signed = labelinfo->is_signed;
+		// TODO: Scale/Offset!!
+		analog.meaning->channels = g_slist_append(NULL, ch);
+		sr_info("%s: num_samples = %d", labelinfo->name, labelinfo->num_samples);
+		analog.num_samples = labelinfo->num_samples;
+		// TODO FROM module/label == channel
+		analog.data = labelinfo->raw_buffer;
+		analog.meaning->mq = SR_MQ_VOLTAGE;
+		analog.meaning->unit = SR_UNIT_VOLT;
+		analog.meaning->mqflags = 0;
+		packet.type = SR_DF_ANALOG;
+		packet.payload = &analog;
+		sr_session_send(sdi, &packet);
+		g_slist_free(analog.meaning->channels);
+	}
+
+	return SR_OK;
+}
+
 SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
-		uint8_t **data)
+		uint32_t *frame_count, uint32_t *bytes_per_frame, uint8_t **data)
 {
 	int len, expected_len;
 	gint64 timeout;
 	struct hp16700_bin_hdr hdr;
+
+	*frame_count = 0;
+	*bytes_per_frame = 0;
 
 	sr_info("get_binary");
 	if (cmd) {
@@ -518,11 +649,14 @@ SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
 		return SR_ERR;
 	}
 
-	expected_len = htonl(hdr.bytes_per_record) * htonl( hdr.frame_count );
+	*frame_count = htonl(hdr.frame_count);
+	*bytes_per_frame = htonl(hdr.bytes_per_record);
+
+	expected_len = *frame_count * *bytes_per_frame;
 	*data = g_malloc(expected_len);
 
-	sr_info("bytes_per_record=%d, frame_count=%d", htonl(hdr.bytes_per_record),
-			htonl(hdr.frame_count), FALSE );
+	sr_info("bytes_per_record=%d, frame_count=%d", *bytes_per_frame,
+			*frame_count );
 	len = hp16700_read_data(devc, (char *)*data, expected_len, FALSE);
 
 	if (len < expected_len) {
@@ -536,6 +670,7 @@ SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
 		*data = NULL;
 		return SR_ERR_TIMEOUT;
 	}
+
 
 	return SR_OK;
 }

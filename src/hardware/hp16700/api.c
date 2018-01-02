@@ -58,17 +58,16 @@ static const uint64_t samplerates[] = {
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
-	GSList *l;
+	GSList *l, *x;
 	struct sr_config *src;
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
 	struct sr_channel *ch;
-	struct hp_channel_group *grp;
+	struct hp_data_label *lbl;
 	const char *conn = NULL;
 	gchar **params;
 	int chan_type;
 	int channel_idx = 0;
-	int i = 0;
 
 	sr_info("scan");
 
@@ -117,77 +116,58 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	sr_info("HIER");
 	if (hp16700_open(devc) != SR_OK)
 		goto err_free;
-	//if (beaglelogic_tcp_detect(devc) != SR_OK)
 	if (hp16700_scan(devc) != SR_OK)
-		goto err_free;
-	if (hp16700_close(devc) != SR_OK)
 		goto err_free;
 	sr_info("HP16700 device found at %s : %s",
 		devc->address, devc->port);
-
-	int module_base = 0;
 
 	for (l = devc->modules; l != NULL; l = l->next)
 	{
 		struct dev_module *module = l->data;
 		struct sr_channel_group *cg = NULL;
-		char group_name[1023];
 
 		if (module == NULL){
 			continue;
 		}
-		module_base += 1024;
 
-		char **changroup_names = {NULL};
-		char **group_names = {NULL};
+		cg = g_malloc0(sizeof(struct sr_channel_group));
+		cg->name = g_strdup(module->name);
+		//cg->priv = module;
 
-		const char *names_scope[] = {"Analog", NULL};
-		const char *channels_scope[] = {"CH1", "CH2", NULL};
+		hp16700_get_scope_info(devc, module);
 
-		const char *names_16550A[] = {"1", "2", "3", "4", "5", "6", NULL};
-		const char *channels_16550A[] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", NULL};
-		if (module->type == HP16700_SCOPE)
+		switch (module->type)
 		{
-			chan_type = SR_CHANNEL_ANALOG;
-			changroup_names = (char **)names_scope;
-			group_names = (char **)channels_scope;
+			case HP16700_SCOPE:
+				chan_type = SR_CHANNEL_ANALOG;
+				break;
+			case HP16700_LOGIC:
+				chan_type = SR_CHANNEL_LOGIC;
+				break;
+			default:
+				sr_info("Skipping module %s because its type is not handled", module->name);
+				continue;
 		}
-		else if (strcmp(module->model, "16550A") == 0)
+		for ( x=module->label_infos ; x != NULL ; x=x->next )
 		{
-			chan_type = SR_CHANNEL_LOGIC;
-			changroup_names = (char **)names_16550A;
-			group_names = (char **)channels_16550A;
-		}
-		for ( ; *changroup_names != NULL ; changroup_names++ )
-		{
-			memset(group_name, 0, sizeof(group_name));
-
-			snprintf(group_name, sizeof(group_name)-1, "%s-%s", module->name, *changroup_names);
-
-			cg = g_malloc0(sizeof(struct sr_channel_group));
-			cg->name = g_strdup(group_name);
-
-			grp = g_new0(struct hp_channel_group, 1);
-			grp->module = module;
-			grp->channel_names = g_strdupv(group_names);
-
-			cg->priv = grp;
-
-			channel_idx += 64;
-			i = 0;
-			for ( char **name = group_names ; *name != NULL ; name++)
+			if (x->data == NULL)
+				continue;
+			
+			lbl = x->data;
+			if ( g_regex_match_simple("(Time|State Number)", lbl->name, G_REGEX_EXTENDED,0) )
 			{
-				char channel_name[512];
-				snprintf(channel_name, sizeof(channel_name)-1, "%s.%s.%s", module->slot, *changroup_names, *name);
-				ch = sr_channel_new(sdi, channel_idx + i, chan_type,  1, channel_name);
-				sr_dev_channel_enable(ch, module->enabled);
-				cg->channels = g_slist_append(cg->channels, ch);
-				i++;
-
+				sr_info("Will not add %s as a channel", lbl->name);
+				continue;
 			}
-			sdi->channel_groups = g_slist_append(sdi->channel_groups, cg);
+
+			ch = sr_channel_new(sdi, channel_idx, chan_type,  1, lbl->name);
+			sr_dev_channel_enable(ch, module->enabled);
+			cg->channels = g_slist_append(cg->channels, ch);
 		}
+		sdi->channel_groups = g_slist_append(sdi->channel_groups, cg);
 	}
+	if (hp16700_close(devc) != SR_OK)
+		goto err_free;
 
 	sdi->priv = devc;
 
@@ -358,18 +338,20 @@ static int config_list(uint32_t key, GVariant **data,
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc = sdi->priv;
-	uint8_t *data;
+	struct dev_module *module = devc->modules->next->data;
 	//GSList *l;
 	//struct sr_trigger *trigger;
 	//struct sr_channel *channel;
 
-	/* Clear capture state */
-	hp16700_get_scope_info(devc, devc->modules->next->data);
-
-	if (hp16700_get_binary(devc, "scope -n Scope<A> -d", &data) != SR_OK)
+	if (hp16700_fetch_scope_data(sdi, module) != SR_OK)
+	{
 		return SR_ERR;
+	}
+	
+	
 
-
+	
+	
 	/* Configure channels */
 	/*
 	for (l = sdi->channels; l; l = l->next) {

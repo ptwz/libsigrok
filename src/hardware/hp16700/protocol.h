@@ -90,7 +90,6 @@ struct dev_module {
 	uint64_t max_sample_rate;
 	uint16_t num_channels;
 	uint64_t sample_rate;
-	uint64_t num_samples;
 
 	double timeunit;
 	GSList *label_infos;
@@ -103,6 +102,7 @@ struct dev_module {
 };
 
 struct hp_data_label {
+	struct dev_module *parent;
 	// Describes one field of the analyzer's output
 	gchar *name;
 	int bits;
@@ -111,6 +111,10 @@ struct hp_data_label {
 
 	double factor;
 	double offset;
+
+	void *raw_buffer;
+	int num_samples;
+	uint8_t *load_ptr;
 };
 
 /* Defines a combination of module/pod for setting purposes */
@@ -119,6 +123,7 @@ struct hp_channel_group {
 	char **channel_names;
 	};
 
+SR_PRIV int bit_to_bytes(int bits);
 SR_PRIV int hp16700_open(struct dev_context *devc);
 SR_PRIV int hp16700_close(struct dev_context *devc);
 SR_PRIV int hp16700_receive_data(int fd, int revents, void *cb_data);
@@ -130,12 +135,16 @@ SR_PRIV int hp16700_send_cmd(struct dev_context *devc,
 				    const char *format, ...);
 SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 				     int maxlen, gboolean text);
+SR_PRIV void hp16700_parse_binary_stream(struct dev_module *module,
+		int num_samples, uint8_t *buffer);
 SR_PRIV int hp16700_drain(struct dev_context *devc);
 SR_PRIV int hp16700_scan(struct dev_context *devc);
 SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *module);
+SR_PRIV int hp16700_fetch_scope_data(struct sr_dev_inst *sdi, struct dev_module *module);
 SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
-				      uint8_t **data);
+		uint32_t *frame_count, uint32_t *bytes_per_sample, uint8_t **data);
 SR_PRIV void hp16700_free_label_descriptor(void *field);
-SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string);
+SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string,
+		struct dev_module *parent);
 
 #endif
