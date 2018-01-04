@@ -26,10 +26,12 @@ SR_PRIV int bit_to_bytes(int bits)
 {
 	int r;
 
+	sr_info("bit_to_bytes: bits=%d", bits);
 	for (r=0; bits>0; r++)
 	{
 		bits -= 8;
 	}
+	sr_info("bit_to_bytes: r=%d", r);
 	return r;
 }
 
@@ -553,9 +555,22 @@ static struct sr_channel *find_channel(GSList *channellist, const char *channeln
 	return ch;
 }
 
-SR_PRIV int hp16700_fetch_scope_data(struct sr_dev_inst *sdi, struct dev_module *module)
+SR_PRIV int hp16700_fetch_all_channels(int fd, int revents, struct sr_dev_inst *sdi)
 {
+	// ToDo: Do a proper scan..
 	struct dev_context *devc = sdi->priv;
+	struct dev_module *module = devc->modules->next->data;
+	(void)fd;
+	(void)revents;
+
+	hp16700_fetch_scope_data(devc, sdi, module);
+}
+
+
+SR_PRIV int hp16700_fetch_scope_data(struct dev_context *devc, 
+		struct sr_dev_inst *sdi,
+		struct dev_module *module)
+{
 	char cmd[1025];
 	uint8_t *data;
 	uint32_t bytes_per_frame;
@@ -606,11 +621,12 @@ SR_PRIV int hp16700_fetch_scope_data(struct sr_dev_inst *sdi, struct dev_module 
 		encoding.unitsize = labelinfo->bytes;
 		encoding.is_bigendian = TRUE;
 		encoding.is_signed = labelinfo->is_signed;
-		// TODO: Scale/Offset!!
+		encoding.is_float = FALSE;
+		encoding.digits = 2;
 		analog.meaning->channels = g_slist_append(NULL, ch);
 		sr_info("%s: num_samples = %d", labelinfo->name, labelinfo->num_samples);
 		analog.num_samples = labelinfo->num_samples;
-		// TODO FROM module/label == channel
+
 		analog.data = labelinfo->raw_buffer;
 		analog.meaning->mq = SR_MQ_VOLTAGE;
 		analog.meaning->unit = SR_UNIT_VOLT;
@@ -692,9 +708,12 @@ SR_PRIV int hp16700_scan(struct dev_context *devc)
 	if (err == NULL){
 		ret = hp16700_get_strings(devc, "modules", &results, 10);
 		for (line = results; line != NULL; line = line->next){
-			struct dev_module *module = g_malloc0(sizeof(struct dev_module));
+			struct dev_module *module;
 			if (line->data == NULL)
 				continue;
+			
+		       	module = g_malloc0(sizeof(struct dev_module));
+			module->parent = devc;
 			columns = g_regex_split_full(split_rgx, (char*)line->data, -1, 0, 0, 6, &err);
 			g_assert(err==NULL);
 			int col_num=0;

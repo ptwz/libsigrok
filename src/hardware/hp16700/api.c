@@ -154,7 +154,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 				continue;
 			
 			lbl = x->data;
-			if ( g_regex_match_simple("(Time|State Number)", lbl->name, G_REGEX_EXTENDED,0) )
+			if ( g_regex_match_simple("(Time|State.Number)", lbl->name, G_REGEX_EXTENDED,0) )
 			{
 				sr_info("Will not add %s as a channel", lbl->name);
 				continue;
@@ -307,6 +307,7 @@ static int config_list(uint32_t key, GVariant **data,
 			*data = std_gvar_samplerates_steps(ARRAY_AND_SIZE(samplerates));
 			break;
 		default:
+			sr_err("%d invalid key without cg", key);
 			return SR_ERR_NA;
 		}
 	} else {
@@ -328,6 +329,7 @@ static int config_list(uint32_t key, GVariant **data,
 			/* The analog group (with all 4 channels) shall not have a pattern property. */
 			return SR_ERR_NA;
 		default:
+			sr_err("%d invalid key with cg", key);
 			return SR_ERR_NA;
 		}
 	}
@@ -338,18 +340,16 @@ static int config_list(uint32_t key, GVariant **data,
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc = sdi->priv;
-	struct dev_module *module = devc->modules->next->data;
+//	struct dev_module *module = devc->modules->next->data;
 	//GSList *l;
 	//struct sr_trigger *trigger;
 	//struct sr_channel *channel;
 
-	if (hp16700_fetch_scope_data(sdi, module) != SR_OK)
-	{
-		return SR_ERR;
-	}
-	
-	
+	std_session_send_df_header(sdi);
 
+	/* Hook up a dummy handler to receive data from the device. */
+	sr_session_source_add(sdi->session, -1, G_IO_IN, 0,
+			      hp16700_fetch_all_channels, (void *)sdi);
 	
 	
 	/* Configure channels */

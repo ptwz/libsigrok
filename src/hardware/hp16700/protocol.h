@@ -42,13 +42,6 @@
 
 #define LOG_PREFIX "hp16700"
 
-/* The size in bytes of chunks to send through the session bus. */
-#define LOGIC_BUFSIZE			4096
-/* Size of the analog pattern space per channel. */
-#define ANALOG_BUFSIZE			4096
-/* This is a development feature: it starts a new frame every n samples. */
-#define SAMPLES_PER_FRAME		0
-
 struct dev_context {
 	char *address;
 	char *port;
@@ -81,6 +74,7 @@ enum hp16700_module_type{
 
 struct dev_module {
 	// Describes a module: Either a whole card or a "machine" of a logic analyzer
+	struct dev_context *parent;
 	enum hp16700_module_type type;
 	gchar *slot;
 	gchar *name;
@@ -139,8 +133,12 @@ SR_PRIV void hp16700_parse_binary_stream(struct dev_module *module,
 		int num_samples, uint8_t *buffer);
 SR_PRIV int hp16700_drain(struct dev_context *devc);
 SR_PRIV int hp16700_scan(struct dev_context *devc);
-SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, struct dev_module *module);
-SR_PRIV int hp16700_fetch_scope_data(struct sr_dev_inst *sdi, struct dev_module *module);
+SR_PRIV int hp16700_get_scope_info(struct dev_context *devc, 
+		struct dev_module *module);
+SR_PRIV int hp16700_fetch_scope_data(struct dev_context *devc, 
+		struct sr_dev_inst *sdi,
+		struct dev_module *module);
+SR_PRIV int hp16700_fetch_all_channels(int fd, int revents, struct sr_dev_inst *sdi);
 SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
 		uint32_t *frame_count, uint32_t *bytes_per_sample, uint8_t **data);
 SR_PRIV void hp16700_free_label_descriptor(void *field);
