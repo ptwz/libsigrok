@@ -20,28 +20,31 @@
 #include <config.h>
 #include <arpa/inet.h>
 #include <stdlib.h>
+#include <math.h>
 #include "protocol.h"
 
 SR_PRIV int str2rational(char *str, struct sr_rational *rational)
 {
 	gchar **fields;
-	int64_t p = 1;
-	uint64_t q = 0;
+	int64_t p = 1e6;
+	uint64_t q = 1e6;
 	int r;
 
-	fields = g_regex_split_simple("\\+[eE]", str, 0, 0);
+	fields = g_strsplit_set(str, "eE", 0);
 	g_assert( g_strv_length(fields) < 3 );
 	g_assert( g_strv_length(fields) >= 1 );
 
-	p = atoi(fields[0]);
+	sr_info("str2rational('%s') -> field[0]='%s' field[1]='%s'\n", str, fields[0], fields[1]);
+	p = round( atof(fields[0]) * 1e6 );
 	if ( g_strv_length(fields) == 2 )
-		q = atoi(fields[1]);
+		q = pow(10, -atoi(fields[1])) * 1e6;
 
 	sr_rational_set(rational, p, q);
 
 	r = g_strv_length(fields);
 	g_strfreev(fields);
 
+	sr_info("str2rational('%s') -> p=%ld q=%ld\n", str, p, q);
 	return r;
 }
 

@@ -113,7 +113,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	devc->port = g_strdup(params[2]);
 	g_strfreev(params);
 
-	sr_info("HIER");
 	if (hp16700_open(devc) != SR_OK)
 		goto err_free;
 	if (hp16700_scan(devc) != SR_OK)
@@ -126,7 +125,8 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		struct dev_module *module = l->data;
 		struct sr_channel_group *cg = NULL;
 
-		if (module == NULL){
+		if ( (module == NULL) || (module->enabled == FALSE) )
+		{
 			continue;
 		}
 
@@ -154,7 +154,8 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 				continue;
 			
 			lbl = x->data;
-			if ( g_regex_match_simple("(Time|State.Number)", lbl->name, G_REGEX_EXTENDED,0) )
+			if ( g_regex_match_simple("(Time|State.Number)", 
+						lbl->name, G_REGEX_EXTENDED, 0) )
 			{
 				sr_info("Will not add %s as a channel", lbl->name);
 				continue;
