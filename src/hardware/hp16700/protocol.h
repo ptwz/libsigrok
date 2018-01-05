@@ -103,8 +103,8 @@ struct hp_data_label {
 	int bytes;
 	gboolean is_signed;
 
-	double factor;
-	double offset;
+	struct sr_rational scale;
+	struct sr_rational offset;
 
 	void *raw_buffer;
 	int num_samples;
@@ -144,5 +144,6 @@ SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
 SR_PRIV void hp16700_free_label_descriptor(void *field);
 SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string,
 		struct dev_module *parent);
+SR_PRIV int str2rational(char *str, struct sr_rational *rational);
 
 #endif

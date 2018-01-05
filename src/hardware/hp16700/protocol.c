@@ -22,6 +22,29 @@
 #include <stdlib.h>
 #include "protocol.h"
 
+SR_PRIV int str2rational(char *str, struct sr_rational *rational)
+{
+	gchar **fields;
+	int64_t p = 1;
+	uint64_t q = 0;
+	int r;
+
+	fields = g_regex_split_simple("\\+[eE]", str, 0, 0);
+	g_assert( g_strv_length(fields) < 3 );
+	g_assert( g_strv_length(fields) >= 1 );
+
+	p = atoi(fields[0]);
+	if ( g_strv_length(fields) == 2 )
+		q = atoi(fields[1]);
+
+	sr_rational_set(rational, p, q);
+
+	r = g_strv_length(fields);
+	g_strfreev(fields);
+
+	return r;
+}
+
 SR_PRIV int bit_to_bytes(int bits)
 {
 	int r;
@@ -367,8 +390,6 @@ SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string
 	int i;
 
 	memset(&r, 0, sizeof(r));
-	r.factor = 1.0;
-	r.offset = 0;
 	r.parent = parent;
 
 	g_assert( g_strv_length(label_set) == 3);
@@ -400,27 +421,27 @@ SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string
 		}
 		else if (strcmp(descriptor_words[i], "picoseconds") == 0)
 		{
-			r.factor = 10.0e-12;
+			sr_rational_set(&r.scale, 1, 12);
 		}
 		else if (strcmp(descriptor_words[i], "nanoseconds") == 0)
 		{
-			r.factor = 10.0e-9;
+			sr_rational_set(&r.scale, 1, 9);
 		}
 		else if (strcmp(descriptor_words[i], "microseconds") == 0)
 		{
-			r.factor = 10.0e-6;
+			sr_rational_set(&r.scale, 1, 6);
 		}
 		else if (strcmp(descriptor_words[i], "milliseconds") == 0)
 		{
-			r.factor = 10.0e-3;
+			sr_rational_set(&r.scale, 1, 3);
 		}
 		else if (strcmp(descriptor_words[i], "yincrement") == 0)
 		{ // TODO: Maybe add assertion to check if next field is there...
-			r.factor = atof(descriptor_words[i+1]);
+			str2rational(descriptor_words[i+1], &r.scale);
 		}
 		else if (strcmp(descriptor_words[i], "yorigin") == 0)
 		{
-			r.offset = atof(descriptor_words[i+1]);
+			str2rational(descriptor_words[i+1], &r.offset);
 		}
 	}
 
@@ -564,6 +585,8 @@ SR_PRIV int hp16700_fetch_all_channels(int fd, int revents, struct sr_dev_inst *
 	(void)revents;
 
 	hp16700_fetch_scope_data(devc, sdi, module);
+
+	return SR_OK;
 }
 
 
@@ -623,6 +646,9 @@ SR_PRIV int hp16700_fetch_scope_data(struct dev_context *devc,
 		encoding.is_signed = labelinfo->is_signed;
 		encoding.is_float = FALSE;
 		encoding.digits = 2;
+		memcpy(&encoding.offset, &labelinfo->offset, sizeof(struct sr_rational));
+		memcpy(&encoding.scale, &labelinfo->scale, sizeof(struct sr_rational));
+
 		analog.meaning->channels = g_slist_append(NULL, ch);
 		sr_info("%s: num_samples = %d", labelinfo->name, labelinfo->num_samples);
 		analog.num_samples = labelinfo->num_samples;

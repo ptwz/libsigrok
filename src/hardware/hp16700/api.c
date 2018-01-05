@@ -339,7 +339,6 @@ static int config_list(uint32_t key, GVariant **data,
 
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
-	struct dev_context *devc = sdi->priv;
 //	struct dev_module *module = devc->modules->next->data;
 	//GSList *l;
 	//struct sr_trigger *trigger;
@@ -349,7 +348,8 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 
 	/* Hook up a dummy handler to receive data from the device. */
 	sr_session_source_add(sdi->session, -1, G_IO_IN, 0,
-			      hp16700_fetch_all_channels, (void *)sdi);
+			      (sr_receive_data_callback)hp16700_fetch_all_channels, 
+			      (void *)sdi);
 	
 	
 	/* Configure channels */
