@@ -46,6 +46,7 @@ struct dev_context {
 	char *address;
 	char *port;
 	int socket;
+	gboolean has_prompt;
 	unsigned int read_timeout;
 	unsigned char *tcp_buffer;
 	unsigned int buffer_len;

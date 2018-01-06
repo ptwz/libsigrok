@@ -163,6 +163,7 @@ SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 	char *inptr = recv_tmp;
 	char *outptr;
 
+        devc->has_prompt = FALSE;
 	remain_len = maxlen;
 	recvd_len = 0;
 	if (text)
@@ -184,6 +185,7 @@ SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 		devc->tcp_buffer = NULL;
 	}
 
+
 	while ( ( ( text && ( strchr(recv_tmp, 0x0a) == NULL ) ) && (remain_len > 0) )
 			|| (!text && (remain_len > 0) ) )
 	{
@@ -194,18 +196,25 @@ SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 			sr_err("Receive error: %s", g_strerror(errno));
 			return SR_ERR;
 		}
+		if ( text && (strcmp(inptr, "->")==0) )
+		{
+			// Prompt: Return it, too 
+		     sr_info("GOT A PROMPT!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+		     devc->has_prompt=TRUE;
+		     return SR_OK;
+		}
 
 		remain_len -= len;
 		recvd_len += len;
 		inptr += len;
 	}
 
-	if (text && (strchr(recv_tmp, '\n') != NULL) )
+	if (text && (strchr(recv_tmp, '\r') != NULL) )
 	{
 		sr_info("Text with newline");
 		len = 0;
 		for ( inptr = recv_tmp, outptr = buf ;
-			((len<1) || (inptr[-1]!='\n')) && (recvd_len>0);
+			((len<1) || (inptr[-1]!='\r')) && (recvd_len>0);
 			inptr++, outptr++, recvd_len--, len++ )
 		{
 			*outptr = *inptr;
@@ -215,6 +224,13 @@ SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 			sr_info("Some data was left: %d, '%s'", recvd_len, inptr);
 			devc->tcp_buffer = g_memdup(inptr, recvd_len);
 			devc->buffer_len = recvd_len;
+		}
+		if ( text && (strcmp(inptr, "->")==0) )
+		{
+			// Prompt: Return it, too 
+		     sr_info("GOT A PROMPT!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+		     devc->has_prompt=TRUE;
+		     return SR_OK;
 		}
 	} else
 	{
@@ -325,21 +341,22 @@ SR_PRIV int hp16700_get_strings(struct dev_context *devc, const char *cmd,
 			return SR_ERR_TIMEOUT;
 		}
 
-		/* Remove trailing newline if present */
-		if (cur_line->len >= 1 && cur_line->str[cur_line->len - 1] == '\n')
-			g_string_truncate(cur_line, cur_line->len - 1);
 
 		/* Remove trailing carriage return if present */
 		if (cur_line->len >= 1 && cur_line->str[cur_line->len - 1] == '\r')
 			g_string_truncate(cur_line, cur_line->len - 1);
 
+		/* Remove trailing newline if present */
+		if (cur_line->len >= 1 && cur_line->str[cur_line->len - 1] == '\n')
+			g_string_truncate(cur_line, cur_line->len - 1);
 		sr_spew("Got cur_line: '%.70s', length %" G_GSIZE_FORMAT ".",
 			cur_line->str, cur_line->len);
 
-		if ( g_str_has_prefix(cur_line->str, "->") )
+		*tcp_resp = g_slist_append(*tcp_resp, g_string_free(cur_line, FALSE));
+
+		if (devc->has_prompt)
 			return SR_OK;
 
-		*tcp_resp = g_slist_append(*tcp_resp, g_string_free(cur_line, FALSE));
 	}
 	return SR_OK;
 }

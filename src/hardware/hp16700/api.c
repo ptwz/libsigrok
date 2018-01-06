@@ -34,7 +34,12 @@ static const uint32_t devopts[] = {
 	SR_CONF_CONTINUOUS,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
 //	SR_CONF_LIMIT_MSEC | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_SAMPLERATE | SR_CONF_GET //| SR_CONF_LIST,
+	SR_CONF_SAMPLERATE | SR_CONF_GET, //| SR_CONF_LIST,
+
+	SR_CONF_LIMIT_MSEC | SR_CONF_GET | SR_CONF_SET,
+	//SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	//SR_CONF_AVERAGING | SR_CONF_GET | SR_CONF_SET,
+	//SR_CONF_AVG_SAMPLES | SR_CONF_GET | SR_CONF_SET,
 };
 
 static const uint32_t devopts_cg_logic[] = {
@@ -282,6 +287,7 @@ static int config_set(uint32_t key, GVariant *data,
 		devc->limit_frames = g_variant_get_uint64(data);
 		break;
 	default:
+		sr_info("config_set key=%d", key);
 		return SR_ERR_NA;
 	}
 
@@ -315,11 +321,15 @@ static int config_list(uint32_t key, GVariant **data,
 		ch = cg->channels->data;
 		switch (key) {
 		case SR_CONF_DEVICE_OPTIONS:
+			sr_info("SR_CONF_DEVICE_OPTIONS ch->type=%d\n", ch->type);
 			if (ch->type == SR_CHANNEL_LOGIC)
 				*data = std_gvar_array_u32(ARRAY_AND_SIZE(devopts_cg_logic));
 			else if (ch->type == SR_CHANNEL_ANALOG) {
-				if (strcmp(cg->name, "Analog") == 0)
+				sr_info("SR_CHANNEL_ANALOG: cg->name=%s", cg->name);
+				if (strncmp(cg->name, "Scope", 5) == 0){
+					sr_info("Got a scope");
 					*data = std_gvar_array_u32(ARRAY_AND_SIZE(devopts_cg_analog_group));
+				}
 				else
 					*data = std_gvar_array_u32(ARRAY_AND_SIZE(devopts_cg_analog_channel));
 			}
