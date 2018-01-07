@@ -155,19 +155,87 @@ SR_PRIV int hp16700_send_cmd(struct dev_context *devc,
 	return SR_OK;
 }
 
-SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
-				     int maxlen, gboolean text)
+SR_PRIV int strncpy_and_clean(uint8_t *dest, uint8_t *src, int len)
 {
-	int len, remain_len, recvd_len;
+	int effective_len = 0;
+	// Copies strings and removes the low ascii characters except for \n
+	for ( ; ( *src!=0 ) && ( len>0 ) ; len--)
+	{
+		if ( (*src < ' ') && (*src != '\n') )
+		{
+			len++;
+		} else
+		{
+			*dest=*src;
+			effective_len++;
+		}
+		dest++;
+		src++;
+	}
+	return effective_len;
+}
+
+SR_PRIV int hp16700_read_answer(struct dev_context *devc, char *buf,
+				     int maxlen)
+{
+	int len;
+	unsigned int remain_len, recvd_len;
 	char *recv_tmp = g_malloc0( maxlen + devc->buffer_len + 1);
 	char *inptr = recv_tmp;
-	char *outptr;
 
-        devc->has_prompt = FALSE;
 	remain_len = maxlen;
 	recvd_len = 0;
-	if (text)
-		sr_info("Looking for text");
+
+	memset(buf, 0, maxlen);
+
+	if (devc->tcp_buffer != NULL) {
+		sr_info("have some buffer len=%d", devc->buffer_len);
+
+		g_assert( devc->buffer_len > 0 );
+
+		remain_len -= devc->buffer_len;
+
+		recvd_len = strncpy_and_clean( (uint8_t *)inptr, devc->tcp_buffer, devc->buffer_len );
+		sr_info("Copied buffer len = %d", recvd_len);
+		inptr += recvd_len + 1;
+
+		g_free(devc->tcp_buffer);
+		devc->tcp_buffer = NULL;
+		devc->buffer_len = 0;
+	}
+
+	while ( (strstr((char*)recv_tmp, "->") == NULL ) && (remain_len > 0) )
+	{
+		len = recv(devc->socket, inptr, remain_len, 0);
+		sr_info("recv'd len=%d, value='%s'", len, recv_tmp);
+
+		if (len < 0) {
+			sr_err("Receive error: %s", g_strerror(errno));
+			return SR_ERR;
+		}
+
+		remain_len -= len;
+		recvd_len += len;
+		inptr += len;
+	}
+
+	len = strlen(recv_tmp);
+	len = len > maxlen ? maxlen : len;
+	strncpy(buf, recv_tmp, maxlen);
+	g_free( recv_tmp );
+
+	return len;
+}
+
+SR_PRIV int hp16700_read_binary(struct dev_context *devc, char *buf,
+				     int expected_len)
+{
+	int len, remain_len, recvd_len;
+	char *recv_tmp = g_malloc0( expected_len + devc->buffer_len + 1);
+	char *inptr = recv_tmp;
+
+	remain_len = expected_len;
+	recvd_len = 0;
 
 	if (devc->tcp_buffer != NULL) {
 		sr_info("have some buffer len=%d", devc->buffer_len);
@@ -186,67 +254,32 @@ SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
 	}
 
 
-	while ( ( ( text && ( strchr(recv_tmp, 0x0a) == NULL ) ) && (remain_len > 0) )
-			|| (!text && (remain_len > 0) ) )
+	while (remain_len > 1)
 	{
 		len = recv(devc->socket, inptr, remain_len, 0);
-		sr_info("recv'd len=%d, value='%s'", len, recv_tmp);
 
 		if (len < 0) {
 			sr_err("Receive error: %s", g_strerror(errno));
 			return SR_ERR;
 		}
-		if ( text && (strcmp(inptr, "->")==0) )
-		{
-			// Prompt: Return it, too 
-		     sr_info("GOT A PROMPT!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-		     devc->has_prompt=TRUE;
-		     return SR_OK;
-		}
 
 		remain_len -= len;
 		recvd_len += len;
 		inptr += len;
+		sr_info("recv'd len=%d, remain_len=%d", len, remain_len);
 	}
 
-	if (text && (strchr(recv_tmp, '\r') != NULL) )
+	remain_len = expected_len - recvd_len;
+	if (remain_len < 0)
 	{
-		sr_info("Text with newline");
-		len = 0;
-		for ( inptr = recv_tmp, outptr = buf ;
-			((len<1) || (inptr[-1]!='\r')) && (recvd_len>0);
-			inptr++, outptr++, recvd_len--, len++ )
-		{
-			*outptr = *inptr;
-		}
-		if (recvd_len > 0)
-		{
-			sr_info("Some data was left: %d, '%s'", recvd_len, inptr);
-			devc->tcp_buffer = g_memdup(inptr, recvd_len);
-			devc->buffer_len = recvd_len;
-		}
-		if ( text && (strcmp(inptr, "->")==0) )
-		{
-			// Prompt: Return it, too 
-		     sr_info("GOT A PROMPT!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-		     devc->has_prompt=TRUE;
-		     return SR_OK;
-		}
+		memcpy( buf, recv_tmp, expected_len );
+		len = expected_len;
+		devc->tcp_buffer = g_memdup(&recv_tmp[expected_len], -remain_len);
+		devc->buffer_len = recvd_len;
 	} else
 	{
-		sr_info("Text without newline/too big");
-		remain_len = maxlen - recvd_len;
-		if (remain_len < 0)
-		{
-			memcpy( buf, recv_tmp, maxlen );
-			len = maxlen;
-			devc->tcp_buffer = g_memdup(&recv_tmp[maxlen], -remain_len);
-			devc->buffer_len = recvd_len;
-		} else
-		{
-			memcpy( buf, recv_tmp, recvd_len );
-			len = recvd_len;
-		}
+		memcpy( buf, recv_tmp, recvd_len );
+		len = recvd_len;
 	}
 	g_free( recv_tmp );
 
@@ -276,7 +309,7 @@ SR_PRIV int hp16700_drain(struct dev_context *devc)
 	do {
 		ret = select(devc->socket + 1, &rset, NULL, NULL, &tv);
 		if (ret > 0)
-			len += hp16700_read_data(devc, buf, 1024, FALSE);
+			len += hp16700_read_binary(devc, buf, 1024);
 	} while (ret > 0);
 
 	sr_spew("Drained %d bytes of data.", len);
@@ -311,77 +344,57 @@ SR_PRIV int hp16700_get_strings(struct dev_context *devc, const char *cmd,
 {
 	int len;
 	gint64 timeout;
+	char **lines;
+	char **line;
+	GString *cur_line = g_string_sized_new(1024);
+	int r = SR_OK;
 
 	if (cmd) {
 		if (hp16700_send_cmd(devc, cmd) != SR_OK)
-			return SR_ERR;
+		{
+			r = SR_ERR_DATA;
+			goto ret;
+		}
 	}
 
 	timeout = g_get_monotonic_time() + devc->read_timeout;
 
 	*tcp_resp = g_slist_alloc();
 
-	while (linecount-- > 0)
-	{
-		GString *cur_line = g_string_sized_new(1024);
-		len = hp16700_read_data(devc, cur_line->str,
-						cur_line->allocated_len, TRUE);
+	len = hp16700_read_answer(devc, cur_line->str,
+					cur_line->allocated_len);
+	g_assert(len > 0);
+	if (len > 0)
+		g_string_set_size(cur_line, len);
 
-		if (len < 0) {
-			g_string_free(cur_line, TRUE);
-			return SR_ERR;
-		}
-
-		if (len > 0)
-			g_string_set_size(cur_line, len);
-
-		if (g_get_monotonic_time() > timeout) {
-			sr_err("Timed out waiting for response.");
-			g_string_free(cur_line, TRUE);
-			return SR_ERR_TIMEOUT;
-		}
-
-
-		/* Remove trailing carriage return if present */
-		if (cur_line->len >= 1 && cur_line->str[cur_line->len - 1] == '\r')
-			g_string_truncate(cur_line, cur_line->len - 1);
-
-		/* Remove trailing newline if present */
-		if (cur_line->len >= 1 && cur_line->str[cur_line->len - 1] == '\n')
-			g_string_truncate(cur_line, cur_line->len - 1);
-		sr_spew("Got cur_line: '%.70s', length %" G_GSIZE_FORMAT ".",
-			cur_line->str, cur_line->len);
-
-		*tcp_resp = g_slist_append(*tcp_resp, g_string_free(cur_line, FALSE));
-
-		if (devc->has_prompt)
-			return SR_OK;
-
+/*	if (g_get_monotonic_time() > timeout) {
+		sr_err("Timed out waiting for response.");
+		g_string_free(cur_line, TRUE);
+		r = SR_ERR_TIMEOUT;
+		goto ret;
 	}
-	return SR_OK;
-}
-
-SR_PRIV int hp16700_get_int(struct dev_context *devc,
-				   const char *cmd, int *response)
-{
-	int ret;
-	GSList *resp = NULL;
-
-	(void)response;
-
-	ret = hp16700_get_strings(devc, cmd, &resp, 1);
-	if (!resp && ret != SR_OK)
-		return ret;
-/* FIXME
-	if (sr_atoi(resp[0], (char *)response->data) == SR_OK)
-		ret = SR_OK;
-	else
-		ret = SR_ERR_DATA;
-
-	g_free(resp);
 */
-	return ret;
+	lines = g_regex_split_simple("\\R+", cur_line->str, 0, 0);
+	
+	g_assert(g_strv_length(lines)>=1);
+
+	for (line = lines; *line != NULL; line++)
+	{
+		sr_spew("Got cur_line: '%s'", *line);
+		if ( strstr(*line, "->") != NULL)
+		{
+			sr_info("hp16700_get_strings: done");
+			r = SR_OK;
+			goto ret;
+		}
+		*tcp_resp = g_slist_append(*tcp_resp, g_strdup(*line));
+	}
+
+	ret:
+	g_string_free(cur_line, TRUE);
+	return r;
 }
+
 
 SR_PRIV void hp16700_free_label_descriptor(void *field)
 {
@@ -412,6 +425,7 @@ SR_PRIV struct hp_data_label *hp16700_parse_label_descriptor(gchar *label_string
 	memset(&r, 0, sizeof(r));
 	r.parent = parent;
 
+	sr_info("hp16700_parse_label_descriptor: len(label_set)=%d", g_strv_length(label_set));
 	g_assert( g_strv_length(label_set) == 3);
 	name = g_strstrip( label_set[1] );
 	descriptor = g_strstrip( label_set[2] );
@@ -704,7 +718,7 @@ SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
 
 	timeout = g_get_monotonic_time() + devc->read_timeout;
 
-	len = hp16700_read_data(devc, (char *)&hdr, sizeof(hdr), FALSE);
+	len = hp16700_read_binary(devc, (char *)&hdr, sizeof(hdr));
 
 	if (len != sizeof(hdr)){
 		sr_err("Error reading binary data. Got len=%d sizeof(hdr)=%ld", len, sizeof(hdr));
@@ -719,7 +733,7 @@ SR_PRIV int hp16700_get_binary(struct dev_context *devc, const char *cmd,
 
 	sr_info("bytes_per_record=%d, frame_count=%d", *bytes_per_frame,
 			*frame_count );
-	len = hp16700_read_data(devc, (char *)*data, expected_len, FALSE);
+	len = hp16700_read_binary(devc, (char *)*data, expected_len);
 
 	if (len < expected_len) {
 		g_free(*data);

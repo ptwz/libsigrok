@@ -117,19 +117,19 @@ struct hp_channel_group {
 	struct dev_module *module;
 	char **channel_names;
 	};
-
+SR_PRIV int hp16700_read_answer(struct dev_context *devc, char *buf,
+				     int maxlen);
+SR_PRIV int hp16700_read_binary(struct dev_context *devc, char *buf,
+				     int expected_len);
+SR_PRIV int strncpy_and_clean(uint8_t *dest, uint8_t *src, int len);
 SR_PRIV int bit_to_bytes(int bits);
 SR_PRIV int hp16700_open(struct dev_context *devc);
 SR_PRIV int hp16700_close(struct dev_context *devc);
 SR_PRIV int hp16700_receive_data(int fd, int revents, void *cb_data);
 SR_PRIV int hp16700_get_strings(struct dev_context *devc, const char *cmd,
 				      GSList **tcp_resp, int linecount);
-SR_PRIV int hp16700_get_int(struct dev_context *devc,
-				   const char *cmd, int *response);
 SR_PRIV int hp16700_send_cmd(struct dev_context *devc,
 				    const char *format, ...);
-SR_PRIV int hp16700_read_data(struct dev_context *devc, char *buf,
-				     int maxlen, gboolean text);
 SR_PRIV void hp16700_parse_binary_stream(struct dev_module *module,
 		int num_samples, uint8_t *buffer);
 SR_PRIV int hp16700_drain(struct dev_context *devc);
